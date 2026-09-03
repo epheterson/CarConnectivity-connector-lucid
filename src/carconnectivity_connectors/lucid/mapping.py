@@ -67,6 +67,7 @@ def _f(value: Any) -> Optional[float]:
 
 
 def plausible_temp(c: Optional[float]) -> Optional[float]:
+    """Drop physically impossible ambient readings; the car occasionally emits a transient spike."""
     if c is None:
         return None
     return c if TEMP_MIN_C <= c <= TEMP_MAX_C else None
@@ -82,7 +83,8 @@ def is_awake(power_state: Optional[int], charge_state: Optional[int] = None) -> 
     return power_state not in _ASLEEP
 
 
-def vehicle_state(power_state: Optional[int], charge_state: Optional[int], speed_mps: Optional[float]) -> GenericVehicle.State:
+def vehicle_state(power_state: Optional[int], charge_state: Optional[int]) -> GenericVehicle.State:
+    """CarConnectivity vehicle state from Lucid power + charge state."""
     if power_state == POWER_DRIVE:
         return GenericVehicle.State.DRIVING
     if not is_awake(power_state, charge_state):
@@ -92,23 +94,27 @@ def vehicle_state(power_state: Optional[int], charge_state: Optional[int], speed
     return GenericVehicle.State.PARKED
 
 
+_CHARGING_STATE_BY_SET = (
+    (CHARGE_CHARGING, Charging.ChargingState.CHARGING),
+    (CHARGE_NOT_CONNECTED, Charging.ChargingState.OFF),
+    (CHARGE_DISCHARGING, Charging.ChargingState.DISCHARGING),
+    (CHARGE_ERROR, Charging.ChargingState.ERROR),
+    (CHARGE_END_OK, Charging.ChargingState.CONSERVATION),
+)
+
+
 def charging_state(cs: Optional[int]) -> Charging.ChargingState:
+    """Lucid ChargeState int -> CarConnectivity ChargingState. Anything not enumerated is plugged in, not charging."""
     if cs is None:
         return Charging.ChargingState.UNKNOWN
-    if cs in CHARGE_CHARGING:
-        return Charging.ChargingState.CHARGING
-    if cs in CHARGE_NOT_CONNECTED:
-        return Charging.ChargingState.OFF
-    if cs in CHARGE_DISCHARGING:
-        return Charging.ChargingState.DISCHARGING
-    if cs in CHARGE_ERROR:
-        return Charging.ChargingState.ERROR
-    if cs in CHARGE_END_OK:
-        return Charging.ChargingState.CONSERVATION
+    for members, state in _CHARGING_STATE_BY_SET:
+        if cs in members:
+            return state
     return Charging.ChargingState.READY_FOR_CHARGING
 
 
 def charging_type(energy_type: Optional[int], cs: Optional[int]) -> Charging.ChargingType:
+    """AC / DC / OFF from Lucid EnergyType and ChargeState."""
     if cs in CHARGE_NOT_CONNECTED:
         return Charging.ChargingType.OFF
     if energy_type == ENERGY_NONE:
@@ -121,12 +127,14 @@ def charging_type(energy_type: Optional[int], cs: Optional[int]) -> Charging.Cha
 
 
 def lock_state(door_locks: Optional[int]) -> Doors.LockState:
+    """Lucid LockState int -> Doors.LockState."""
     if door_locks is None:
         return Doors.LockState.UNKNOWN
     return Doors.LockState.LOCKED if door_locks == LOCK_LOCKED else Doors.LockState.UNLOCKED
 
 
 def door_open_state(door: Optional[int]) -> Doors.OpenState:
+    """Lucid DoorState int -> Doors.OpenState (AJAR preserved)."""
     if door is None or door == 0:
         return Doors.OpenState.UNKNOWN
     if door == DOOR_CLOSED:
@@ -144,10 +152,12 @@ def hvac_active(power: Optional[int]) -> Optional[bool]:
 
 
 def position_type(power_state: Optional[int]) -> Position.PositionType:
+    """Driving or parking, from power state."""
     return Position.PositionType.DRIVING if power_state == POWER_DRIVE else Position.PositionType.PARKING
 
 
 def speed_kmh(speed_mps: Optional[float]) -> Optional[float]:
+    """Lucid reports chassis.speed in metres per second (proto comment); CarConnectivity wants km/h."""
     v = _f(speed_mps)
     return None if v is None else v * MPS_TO_KMH
 

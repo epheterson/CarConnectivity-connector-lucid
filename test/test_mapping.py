@@ -10,7 +10,7 @@ from carconnectivity_connectors.lucid import mapping as m
 def test_snapshot_parked_asleep_not_connected():
     # power SLEEP(1), charge NOT_CONNECTED(1), speed 0.0, door_locks 2
     assert m.is_awake(1, 1) is False
-    assert m.vehicle_state(1, 1, 0.0) is GenericVehicle.State.OFFLINE
+    assert m.vehicle_state(1, 1) is GenericVehicle.State.OFFLINE
     assert m.charging_state(1) is Charging.ChargingState.OFF
     assert m.charging_type(0, 1) is Charging.ChargingType.OFF
     assert m.lock_state(2) is Doors.LockState.LOCKED
@@ -21,7 +21,7 @@ def test_charging_overrides_sleep():
     # observed 2026-08-11: SLEEP_CHARGE(6) for a whole session; must not be "asleep"
     assert m.is_awake(6, 8) is True
     assert m.charging_state(8) is Charging.ChargingState.CHARGING
-    assert m.vehicle_state(6, 8, 0.0) is GenericVehicle.State.PARKED
+    assert m.vehicle_state(6, 8) is GenericVehicle.State.PARKED
 
 
 def test_undefined_power_states_are_not_awake():
@@ -30,7 +30,7 @@ def test_undefined_power_states_are_not_awake():
 
 
 def test_driving():
-    assert m.vehicle_state(4, 1, 20.0) is GenericVehicle.State.DRIVING
+    assert m.vehicle_state(4, 1) is GenericVehicle.State.DRIVING
     assert m.position_type(4) is Position.PositionType.DRIVING
 
 

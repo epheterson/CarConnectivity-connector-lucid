@@ -1,10 +1,14 @@
 """CarConnectivity connector for Lucid Motors vehicles.
 
+Writing into the model goes through GenericAttribute._set_value(), which is the
+CarConnectivity convention for connectors; hence the module-wide disable.
+
 Read-only. Polls the same mobile gRPC API the Lucid app uses, via
 python-lucidmotors, and populates the CarConnectivity model. Reads never wake
 the car (the library only wakes on commands with auto_wake=True, which this
 never sets), so polling costs nothing in vampire drain.
 """
+# pylint: disable=protected-access
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
@@ -136,14 +140,17 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
 
     # -- fetching --------------------------------------------------------------
     def fetch_all(self) -> None:
+        """First fetch: vehicles and their full state."""
         self.fetch_vehicles()
         self.car_connectivity.transaction_end()
 
     def update_vehicles(self) -> None:
+        """Subsequent polls."""
         # One gRPC call returns every vehicle with full state, so "update" and "fetch" are the same request.
         self.fetch_vehicles()
 
     def fetch_vehicles(self) -> None:
+        """Fetch every vehicle on the account, add new ones to the garage, drop ones that disappeared, apply state."""
         garage: Garage = self.car_connectivity.garage
         seen: set[str] = set()
         for lucid_vehicle in self._session.fetch_vehicles():
@@ -168,12 +175,21 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 garage.remove_vehicle(vin)
 
     # -- mapping ---------------------------------------------------------------
-    def _apply(self, vehicle: LucidVehicle, lv: Any) -> None:  # pylint: disable=too-many-locals, too-many-statements
+    def _apply(self, vehicle: LucidVehicle, lv: Any) -> None:
+        """Copy one Lucid vehicle (config + state) into the CarConnectivity model."""
         cfg, st = _dig(lv, "config"), _dig(lv, "state")
         ts_ms = _f(_dig(st, "last_updated_ms"))
         measured = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc) if ts_ms else datetime.now(tz=timezone.utc)
-        sv = vehicle  # short alias, everything below is _set_value on it  # pylint: disable=protected-access
+        self._apply_identity(vehicle, cfg, st, measured)
+        self._apply_drive(vehicle, st, measured)
+        if isinstance(vehicle, LucidElectricVehicle):
+            self._apply_charging(vehicle, st, measured)
+        self._apply_position(vehicle, st, measured)
+        self._apply_doors(vehicle, st, measured)
+        self._apply_climate(vehicle, st, measured)
 
+    @staticmethod
+    def _apply_identity(sv: LucidVehicle, cfg: Any, st: Any, measured: datetime) -> None:
         sv.type._set_value(GenericVehicle.Type.ELECTRIC)
         if _dig(cfg, "nickname"):
             sv.name._set_value(_dig(cfg, "nickname"))
@@ -184,20 +200,17 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sw = _dig(st, "chassis", "software_version")
         if sw and hasattr(sv, 'software') and hasattr(sv.software, 'version'):
             sv.software.version._set_value(sw, measured=measured)
-
         power, cs = _dig(st, "power"), _dig(st, "charging", "charge_state")
-        speed = mapping.speed_kmh(_dig(st, "chassis", "speed"))
-        sv.state._set_value(mapping.vehicle_state(power, cs, speed), measured=measured)
-        sv.connection_state._set_value(GenericVehicle.ConnectionState.REACHABLE if mapping.is_awake(power, cs) else GenericVehicle.ConnectionState.OFFLINE,
-                                       measured=measured)
-
+        sv.state._set_value(mapping.vehicle_state(power, cs), measured=measured)
+        reachable = GenericVehicle.ConnectionState.REACHABLE if mapping.is_awake(power, cs) else GenericVehicle.ConnectionState.OFFLINE
+        sv.connection_state._set_value(reachable, measured=measured)
         odo = _f(_dig(st, "chassis", "odometer_km"))
         if odo is not None:
             sv.odometer._set_value(odo, measured=measured, unit=Length.KM)
-        ext = mapping.plausible_temp(_f(_dig(st, "cabin", "exterior_temp")))
-        sv.outside_temperature._set_value(ext, measured=measured, unit=Temperature.C)
+        sv.outside_temperature._set_value(mapping.plausible_temp(_f(_dig(st, "cabin", "exterior_temp"))), measured=measured, unit=Temperature.C)
 
-        # Drive + battery
+    @staticmethod
+    def _apply_drive(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         drive_id = 'primary'
         drive: GenericDrive
         if drive_id in sv.drives.drives:
@@ -217,30 +230,34 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             drive.battery.temperature_min._set_value(mapping.plausible_temp(_f(_dig(bat, "min_cell_temp"))), measured=measured, unit=Temperature.C)
             drive.battery.temperature_max._set_value(mapping.plausible_temp(_f(_dig(bat, "max_cell_temp"))), measured=measured, unit=Temperature.C)
 
-        # Charging
+    @staticmethod
+    def _apply_charging(sv: LucidElectricVehicle, st: Any, measured: datetime) -> None:
         ch = _dig(st, "charging")
-        if isinstance(sv, LucidElectricVehicle):
-            sv.charging.state._set_value(mapping.charging_state(cs), measured=measured)
-            sv.charging.type._set_value(mapping.charging_type(_dig(ch, "energy_type"), cs), measured=measured)
-            kw = _f(_dig(ch, "charge_rate_kwh_precise"))
-            sv.charging.power._set_value(kw if cs in mapping.CHARGE_CHARGING else 0.0, measured=measured, unit=Power.KW)
-            rate_mph = _f(_dig(ch, "charge_rate_mph_precise"))
-            sv.charging.rate._set_value(rate_mph * 1.609344 if (rate_mph is not None and cs in mapping.CHARGE_CHARGING) else 0.0,
-                                        measured=measured, unit=Speed.KMH)
-            limit = _f(_dig(ch, "charge_limit_percent"))
-            if limit is not None:
-                sv.charging.settings.target_level._set_value(limit, measured=measured)
+        cs = _dig(ch, "charge_state")
+        charging = cs in mapping.CHARGE_CHARGING
+        sv.charging.state._set_value(mapping.charging_state(cs), measured=measured)
+        sv.charging.type._set_value(mapping.charging_type(_dig(ch, "energy_type"), cs), measured=measured)
+        kw = _f(_dig(ch, "charge_rate_kwh_precise"))
+        sv.charging.power._set_value(kw if charging else 0.0, measured=measured, unit=Power.KW)
+        rate_mph = _f(_dig(ch, "charge_rate_mph_precise"))
+        sv.charging.rate._set_value(rate_mph * 1.609344 if (rate_mph is not None and charging) else 0.0, measured=measured, unit=Speed.KMH)
+        limit = _f(_dig(ch, "charge_limit_percent"))
+        if limit is not None:
+            sv.charging.settings.target_level._set_value(limit, measured=measured)
 
-        # Position
+    @staticmethod
+    def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         gps = _dig(st, "gps")
         lat, lon = _f(_dig(gps, "location", "latitude")), _f(_dig(gps, "location", "longitude"))
-        if lat is not None and lon is not None:
-            sv.position.latitude._set_value(lat, measured=measured)
-            sv.position.longitude._set_value(lon, measured=measured)
-            sv.position.heading._set_value(_f(_dig(gps, "heading_precise")), measured=measured)
-            sv.position.position_type._set_value(mapping.position_type(power), measured=measured)
+        if lat is None or lon is None:
+            return
+        sv.position.latitude._set_value(lat, measured=measured)
+        sv.position.longitude._set_value(lon, measured=measured)
+        sv.position.heading._set_value(_f(_dig(gps, "heading_precise")), measured=measured)
+        sv.position.position_type._set_value(mapping.position_type(_dig(st, "power")), measured=measured)
 
-        # Doors and locks
+    @staticmethod
+    def _apply_doors(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         body = _dig(st, "body")
         sv.doors.lock_state._set_value(mapping.lock_state(_dig(body, "door_locks")), measured=measured)
         any_open = False
@@ -256,12 +273,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             state = mapping.door_open_state(raw)
             door.open_state._set_value(state, measured=measured)
             door.lock_state._set_value(sv.doors.lock_state.value, measured=measured)
-            any_open = any_open or state is Doors.OpenState.OPEN
+            any_open = any_open or state in (Doors.OpenState.OPEN, Doors.OpenState.AJAR)
         sv.doors.open_state._set_value(Doors.OpenState.OPEN if any_open else Doors.OpenState.CLOSED, measured=measured)
 
-        # Climate
+    @staticmethod
+    def _apply_climate(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         hvac_on = mapping.hvac_active(_dig(st, "hvac", "power"))
-        interior = mapping.plausible_temp(_f(_dig(st, "cabin", "interior_temp")))
         if hvac_on is None:
             clim_state = sv.climatization.ClimatizationState.UNKNOWN
         elif hvac_on:
@@ -272,8 +289,6 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         target = _f(_dig(st, "hvac", "front_left_set_temperature"))
         if target is not None:
             sv.climatization.settings.target_temperature._set_value(target, measured=measured, unit=Temperature.C)
-        if interior is not None and hasattr(sv.climatization, 'interior_temperature'):
-            sv.climatization.interior_temperature._set_value(interior, measured=measured, unit=Temperature.C)
 
     # -- identity --------------------------------------------------------------
     def get_version(self) -> str:

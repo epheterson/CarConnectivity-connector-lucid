@@ -28,6 +28,7 @@ REFRESH_MARGIN_S = 60.0  # must exceed the poll interval; 60 s min interval -> r
 
 
 def load_refresh_token(path: Path) -> str:
+    """Read the opaque refresh token from a JSON file."""
     try:
         return json.loads(path.read_text())["refresh_token"]
     except (OSError, ValueError, KeyError) as exc:
@@ -61,9 +62,11 @@ class LucidSession:
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
+        """Create the event loop; call from the thread that will own it."""
         self._loop = asyncio.new_event_loop()
 
     def close(self) -> None:
+        """Close the API and the loop."""
         if self._loop is None:
             return
         if self._api is not None:
@@ -76,6 +79,7 @@ class LucidSession:
         self._loop = None
 
     def run(self, coro):
+        """Run a coroutine on this session's loop."""
         if self._loop is None:
             raise RuntimeError("LucidSession.start() not called")
         return self._loop.run_until_complete(coro)
@@ -91,7 +95,8 @@ class LucidSession:
         if self._api is None:
             api = self._make_api()
             if hasattr(api, "__aenter__"):
-                await api.__aenter__()
+                # The client stays open across many polls, so its lifetime is ours, not a with-block's.
+                await api.__aenter__()  # pylint: disable=unnecessary-dunder-call
             token = load_refresh_token(self._token_path)
             try:
                 await api.login_with_refresh_token(token)
@@ -114,6 +119,7 @@ class LucidSession:
         return self.run(self._ensure())
 
     def fetch_vehicles(self):
+        """All vehicles with full state -- one gRPC call."""
         async def _go():
             api = await self._ensure()
             try:

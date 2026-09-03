@@ -36,3 +36,6 @@ write_to = "src/carconnectivity_connectors/lucid/_version.py"
 [tool.pylint.format]
 max-line-length = 160
 ignore-patterns = "_version.py"
+
+[tool.bandit]
+exclude_dirs = [".venv", "venv", "build", "dist", "test"]
