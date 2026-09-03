@@ -18,7 +18,7 @@ from carconnectivity.attributes import DurationAttribute, EnumAttribute
 from carconnectivity.doors import Doors
 from carconnectivity.drive import ElectricDrive, GenericDrive
 from carconnectivity.enums import ConnectionState
-from carconnectivity.errors import APICompatibilityError, AuthenticationError, ConfigurationError, RetrievalError, \
+from carconnectivity.errors import APICompatibilityError, AuthenticationError, RetrievalError, \
     TemporaryAuthenticationError, TooManyRequestsError
 from carconnectivity.garage import Garage
 from carconnectivity.units import Energy, Length, Power, Speed, Temperature
@@ -65,7 +65,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             raise AuthenticationError("refresh_token_file was not found in config -- mint one with the lucidmotors login example and point at it")
         self.active_config['refresh_token_file'] = str(config['refresh_token_file'])
         if not Path(self.active_config['refresh_token_file']).expanduser().exists():
-            raise ConfigurationError(f"refresh_token_file does not exist: {self.active_config['refresh_token_file']}")
+            # An absent credential is an authentication problem, and CarConnectivity's CI convention
+            # expects AuthenticationError from a connector started without one.
+            raise AuthenticationError(f"refresh_token_file does not exist: {self.active_config['refresh_token_file']}")
 
         self.active_config['interval'] = 60
         if 'interval' in config:
