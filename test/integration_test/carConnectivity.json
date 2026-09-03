@@ -1,0 +1,18 @@
+{
+    "carConnectivity": {
+        "log_level": "debug",
+        "connectors": [
+            {
+                "type": "lucid",
+                "disabled": false,
+                "config": {
+                    "log_level": "debug",
+                    "api_log_level": "debug",
+                    "interval": 60,
+                    "refresh_token_file": "/secrets/lucid-token.json"
+                }
+            }
+        ],
+        "plugins": []
+    }
+}
