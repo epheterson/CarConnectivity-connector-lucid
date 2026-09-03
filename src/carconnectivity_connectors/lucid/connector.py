@@ -178,11 +178,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         model = _dig(cfg, "model")
         if model is not None:
             sv.model._set_value({1: 'Air', 2: 'Gravity'}.get(int(model), f'Lucid model {model}'))
-        year = _dig(cfg, "model_year")
-        if year:
-            sv.model_year._set_value(int(year))
+        # VehicleConfig carries no model year (checked against the proto 2026-09-03); model_year stays unset.
         sw = _dig(st, "chassis", "software_version")
-        if sw:
+        if sw and hasattr(sv, 'software') and hasattr(sv.software, 'version'):
             sv.software.version._set_value(sw, measured=measured)
 
         power, cs = _dig(st, "power"), _dig(st, "charging", "charge_state")
