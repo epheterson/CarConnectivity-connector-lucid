@@ -57,3 +57,23 @@ def test_doors():
     assert m.door_open_state(2) is Doors.OpenState.CLOSED
     assert m.door_open_state(1) is Doors.OpenState.OPEN
     assert set(m.DOORS) == {"front_left", "front_right", "rear_left", "rear_right", "frunk", "trunk"}
+
+
+def test_hvac_power_two_is_off():
+    # proto: HVAC_ON = 1, HVAC_OFF = 2. The bridge had this inverted.
+    assert m.hvac_active(1) is True
+    assert m.hvac_active(2) is False
+    assert m.hvac_active(3) is True   # PRECONDITION
+    assert m.hvac_active(6) is True   # KEEP_TEMP
+    assert m.hvac_active(0) is None
+    assert m.hvac_active(None) is None
+
+
+def test_door_ajar_and_close_error():
+    assert m.door_open_state(3) is Doors.OpenState.AJAR
+    assert m.door_open_state(4) is Doors.OpenState.OPEN
+    assert m.door_open_state(0) is Doors.OpenState.UNKNOWN
+
+
+def test_energy_none_is_off():
+    assert m.charging_type(5, 8) is Charging.ChargingType.OFF

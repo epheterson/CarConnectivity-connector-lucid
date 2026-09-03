@@ -258,9 +258,14 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.doors.open_state._set_value(Doors.OpenState.OPEN if any_open else Doors.OpenState.CLOSED, measured=measured)
 
         # Climate
-        hvac_on = _dig(st, "hvac", "power") == 2
+        hvac_on = mapping.hvac_active(_dig(st, "hvac", "power"))
         interior = mapping.plausible_temp(_f(_dig(st, "cabin", "interior_temp")))
-        clim_state = sv.climatization.ClimatizationState.VENTILATION if hvac_on else sv.climatization.ClimatizationState.OFF
+        if hvac_on is None:
+            clim_state = sv.climatization.ClimatizationState.UNKNOWN
+        elif hvac_on:
+            clim_state = sv.climatization.ClimatizationState.VENTILATION
+        else:
+            clim_state = sv.climatization.ClimatizationState.OFF
         sv.climatization.state._set_value(clim_state, measured=measured)
         target = _f(_dig(st, "hvac", "front_left_set_temperature"))
         if target is not None:

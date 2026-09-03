@@ -33,12 +33,17 @@ CHARGE_END_OK = {9}
 CHARGE_ERROR = {10, 11, 12, 15, 16, 22, 26, 27, 28, 29}
 CHARGE_DISCHARGING = {19}
 
-# EnergyType on ChargingState: 0 UNKNOWN, 1 AC, 2 DC (observed; proto enum).
-ENERGY_AC, ENERGY_DC = 1, 2
+# EnergyType: 0 UNKNOWN, 1 AC, 2 DC, 3 DIGITAL, 4 V2V, 5 NONE (proto enum).
+ENERGY_AC, ENERGY_DC, ENERGY_NONE = 1, 2, 5
 
-# LockState / DoorState ints from the proto.
+# LockState: 0 UNKNOWN, 1 UNLOCKED, 2 LOCKED.  DoorState: 0 UNKNOWN, 1 OPEN, 2 CLOSED, 3 AJAR, 4 CLOSE_ERROR.
 LOCK_LOCKED = 2
-DOOR_CLOSED = 2
+DOOR_OPEN, DOOR_CLOSED, DOOR_AJAR, DOOR_CLOSE_ERROR = 1, 2, 3, 4
+
+# HvacPower: 0 UNKNOWN, 1 ON, 2 OFF, 3 PRECONDITION, 5 RESIDUAL_HEATING, 6 KEEP_TEMP, 7 HEATSTROKE_PREVENTION.
+# NOTE: 2 is OFF. The lucid-bridge treated 2 as on; that is inverted.
+HVAC_OFF = 2
+_HVAC_ACTIVE = {1, 3, 5, 6, 7}
 
 MPS_TO_KMH = 3.6
 TEMP_MIN_C, TEMP_MAX_C = -60.0, 70.0  # a Gravity once reported 109.6 C exterior for two minutes
@@ -106,6 +111,8 @@ def charging_state(cs: Optional[int]) -> Charging.ChargingState:
 def charging_type(energy_type: Optional[int], cs: Optional[int]) -> Charging.ChargingType:
     if cs in CHARGE_NOT_CONNECTED:
         return Charging.ChargingType.OFF
+    if energy_type == ENERGY_NONE:
+        return Charging.ChargingType.OFF
     if energy_type == ENERGY_AC:
         return Charging.ChargingType.AC
     if energy_type == ENERGY_DC:
@@ -120,9 +127,20 @@ def lock_state(door_locks: Optional[int]) -> Doors.LockState:
 
 
 def door_open_state(door: Optional[int]) -> Doors.OpenState:
-    if door is None:
+    if door is None or door == 0:
         return Doors.OpenState.UNKNOWN
-    return Doors.OpenState.CLOSED if door == DOOR_CLOSED else Doors.OpenState.OPEN
+    if door == DOOR_CLOSED:
+        return Doors.OpenState.CLOSED
+    if door == DOOR_AJAR:
+        return Doors.OpenState.AJAR
+    return Doors.OpenState.OPEN  # OPEN, and CLOSE_ERROR (a door that failed to close is not closed)
+
+
+def hvac_active(power: Optional[int]) -> Optional[bool]:
+    """None when unknown, else whether climate is doing anything."""
+    if power is None or power == 0:
+        return None
+    return power in _HVAC_ACTIVE
 
 
 def position_type(power_state: Optional[int]) -> Position.PositionType:
