@@ -39,3 +39,10 @@ ignore-patterns = "_version.py"
 
 [tool.bandit]
 exclude_dirs = [".venv", "venv", "build", "dist", "test"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+filterwarnings = [
+    # pytimeparse (a CarConnectivity dependency) still uses codecs.open(); not our code.
+    "ignore:codecs.open\\(\\) is deprecated:DeprecationWarning:pytimeparse",
+]
