@@ -33,3 +33,8 @@ Commands. Images. Trip/charge history (that is EVify's history engine, not a con
 - Stages 2–4: 12 tests pass, flake8 clean. Cadence test: ten polls, zero refreshes inside the window.
 - Stage 5: real car via `CarConnectivity(config)`: TARS / Gravity / PARKED / REACHABLE; level 77 %, 480 km; battery 117.21 / 90.30 kWh, cells 21.8–22.7 °C; PARKING + heading; six doors + lock; climatization + target; charging target 90 %; software 3.6.4. `_apply` in-thread: no exception. Second TTL reading right after login: 300 s.
 - Not done: stage 7 (registry entry) — only applies once it runs as a service.
+
+## Evidence — 2026-09-03 evening (Car Command SP1)
+- Tagged v0.1.0 (a5178d2) and shipped as a wheel inside the `carcommand-cc` image on the Mini (CarConnectivity 0.11.11 + database/webui/restapi plugins). Live: connector healthy, connection_state connected, TARS in the garage, WebUI in miles (locale en_US.UTF-8).
+- v0.1.1 (f622e0e): `available_capacity` now comes from `capacity_kwhr`; `kwhr` (energy remaining, tracks SoC) is no longer reported as capacity; `total_capacity` left unset (the car does not report gross). Found because `drives.capacity` read 87.5 of 117.2 at ~75% SoC. Regression test `test/test_apply_drive.py` (630fe10); suite 17 passed, no warnings.
+- Stack, dashboards and registry: `~/vault/docs/plans/2026-09-03-carcommand-sp1-plan.md`.
