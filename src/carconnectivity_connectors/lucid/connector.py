@@ -225,8 +225,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         drive.range._set_value(rng, measured=measured, unit=Length.KM)
         sv.drives.total_range._set_value(rng, measured=measured, unit=Length.KM)
         if isinstance(drive, ElectricDrive):
-            drive.battery.total_capacity._set_value(_f(_dig(bat, "capacity_kwhr")), measured=measured, unit=Energy.KWH)
-            drive.battery.available_capacity._set_value(_f(_dig(bat, "kwhr")), measured=measured, unit=Energy.KWH)
+            # Lucid reports capacity_kwhr (the pack's usable capacity, a constant) and kwhr (energy
+            # remaining right now, which tracks SoC). CarConnectivity's available_capacity is the
+            # constant usable capacity; the database plugin stores it as drives.capacity and the
+            # dashboards multiply SoC deltas by it. Remaining energy has no CarConnectivity field, so it
+            # is not mapped. Gross (total) capacity is not reported by the car, so it is left unset.
+            drive.battery.available_capacity._set_value(_f(_dig(bat, "capacity_kwhr")), measured=measured, unit=Energy.KWH)
             drive.battery.temperature_min._set_value(mapping.plausible_temp(_f(_dig(bat, "min_cell_temp"))), measured=measured, unit=Temperature.C)
             drive.battery.temperature_max._set_value(mapping.plausible_temp(_f(_dig(bat, "max_cell_temp"))), measured=measured, unit=Temperature.C)
 
