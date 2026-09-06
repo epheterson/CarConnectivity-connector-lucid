@@ -6,6 +6,15 @@ A [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity) connector 
 
 Verified against a 2026 Gravity on 2026-09-03.
 
+
+## Installing
+
+```
+pip install "carconnectivity-connector-lucid @ git+https://github.com/epheterson/CarConnectivity-connector-lucid@v0.1.3"
+```
+
+Python 3.12 or newer. Not on PyPI yet: this package depends on `lucidmotors` at an unreleased upstream commit, for `login_with_refresh_token()`, and PyPI rejects direct-reference dependencies. The moment [nshp/python-lucidmotors](https://github.com/nshp/python-lucidmotors) cuts a release containing it, the dependency becomes an ordinary version specifier and a tag publishes to PyPI automatically.
+
 ## Install
 
 ```

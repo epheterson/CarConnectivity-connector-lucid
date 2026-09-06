@@ -1,0 +1,55 @@
+# Publish to PyPI on a version tag, using trusted publishing — no API token is stored
+# anywhere. Configure the publisher once at
+# https://pypi.org/manage/project/carconnectivity-connector-lucid/settings/publishing/
+# (owner epheterson, repository CarConnectivity-connector-lucid, workflow publish.yml,
+# environment pypi).
+#
+# The guard exists because PyPI rejects direct references. While this package pins
+# `lucidmotors @ git+...` — which it must, until upstream releases the refresh-token
+# login it depends on — an upload cannot succeed, and a tag failing here would look like
+# a broken release rather than a known wait.
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Refuse to publish a package PyPI cannot accept
+        run: |
+          if grep -qE '^\s*"[^"]+ @ (git\+|https?://)' pyproject.toml; then
+            echo "::notice::pyproject.toml still has a direct reference dependency, which PyPI rejects."
+            echo "::notice::Waiting on an upstream lucidmotors release; see the README. Not publishing."
+            echo "skip=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        if: env.skip != 'true'
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Check the metadata before uploading
+        if: env.skip != 'true'
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        if: env.skip != 'true'

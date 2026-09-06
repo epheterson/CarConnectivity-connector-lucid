@@ -9,6 +9,7 @@
 - The `lucidmotors` pin to upstream commit `13087ad` is in a tag for the first time. Up to and including v0.1.2 the dependency was `@main`, so two installs of the same tag could get different upstream code.
 
 ### Changed
+- A tag publishes to PyPI through trusted publishing, once the dependency is one PyPI will accept. The workflow refuses rather than fails while it is a direct reference.
 - CI tests Python 3.12 to 3.14, and runs on changes to `setup_requirements.txt` and the `Makefile` — a linter bump used to be merged without the workflow ever running.
 - Dependabot is weekly and grouped. Daily and ungrouped opened six pull requests in one minute on publication day, which was enough noise to hide the one CI failure that mattered.
 - Dev tooling: flake8 7.3, pylint 4.0.8, bandit 1.9.4. Flask is gone from `setup_requirements.txt`; this connector has no UI and never imported it.
