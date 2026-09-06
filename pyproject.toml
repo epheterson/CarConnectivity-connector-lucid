@@ -17,6 +17,7 @@ dependencies = [
     "lucidmotors @ git+https://github.com/nshp/python-lucidmotors.git@13087ad",  # main at 2026-09-05; has login_with_refresh_token(), unreleased upstream
 ]
 readme = "README.md"
+keywords = ["lucid", "carconnectivity", "ev", "telemetry", "connector"]
 license = "MIT"
 license-files = ["LICENSE"]
 classifiers = [
@@ -28,11 +29,21 @@ classifiers = [
     "Topic :: Software Development :: Libraries",
 ]
 
+[project.urls]
+Homepage = "https://github.com/epheterson/CarConnectivity-connector-lucid"
+Issues = "https://github.com/epheterson/CarConnectivity-connector-lucid/issues"
+Changelog = "https://github.com/epheterson/CarConnectivity-connector-lucid/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 test = ["pytest>=7.4", "pytest-asyncio>=0.23"]
 
 [tool.setuptools_scm]
 write_to = "src/carconnectivity_connectors/lucid/_version.py"
+
+# flake8 allows 160 columns; tell black the same so it does not reflow this repo
+# into a narrower style than its own linter asks for.
+[tool.black]
+line-length = 160
 
 [tool.pylint.format]
 max-line-length = 160

@@ -1,8 +1,21 @@
 # Changelog
 
 ## 0.1.3 (2026-09-06)
-- `requires-python` is `>=3.12`. It said `>=3.10`, but the only dependency, `lucidmotors`, requires `^3.12`, so installing on 3.10 or 3.11 failed on the dependency instead of being refused cleanly. The 3.10 and 3.11 classifiers are gone and CI tests 3.12-3.14.
-- The `lucidmotors` pin to upstream commit `13087ad` is now in a tag. Up to and including v0.1.2 the dependency was `@main`, so two installs of the same tag could get different upstream code.
+
+### Fixed
+- An unknown lock state is no longer reported as unlocked. Lucid's `LockState` 0 is UNKNOWN, but it fell through to UNLOCKED, so a car that had not yet said whether it was locked was published as unlocked — and anything watching for locked → unlocked raises an alarm about a car left open.
+- Doors are only summarised when at least one of them reported. A missing body block used to publish "all doors closed", which is indistinguishable from six genuinely shut doors and is invented from no data.
+- `requires-python` is `>=3.12`. It said `>=3.10` and the classifiers advertised 3.10 and 3.11, but the only dependency, `lucidmotors`, requires `^3.12`, so installing on 3.10 failed on the dependency (`Package 'lucidmotors' requires a different Python`) rather than being refused cleanly. Every release from v0.1.0 carried the wrong floor.
+- The `lucidmotors` pin to upstream commit `13087ad` is in a tag for the first time. Up to and including v0.1.2 the dependency was `@main`, so two installs of the same tag could get different upstream code.
+
+### Changed
+- CI tests Python 3.12 to 3.14, and runs on changes to `setup_requirements.txt` and the `Makefile` — a linter bump used to be merged without the workflow ever running.
+- Dependabot is weekly and grouped. Daily and ungrouped opened six pull requests in one minute on publication day, which was enough noise to hide the one CI failure that mattered.
+- Dev tooling: flake8 7.3, pylint 4.0.8, bandit 1.9.4. Flask is gone from `setup_requirements.txt`; this connector has no UI and never imported it.
+- `project.urls` and keywords added.
+
+### Tests
+- 17 to 41. New coverage for the None-safe accessors, AC/DC charge typing, every enumerated and unenumerated charge state, lock and door states, position type, the metres-per-second speed conversion, and the temperature plausibility bounds. Both bugs above are covered by tests that were confirmed to fail before the fix.
 
 ## 0.1.2 (2026-09-04)
 - Regression test for the battery capacity mapping.

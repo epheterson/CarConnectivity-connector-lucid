@@ -47,3 +47,33 @@ def test_missing_capacity_leaves_the_field_unset(vehicle):
     drive = vehicle.drives.drives["primary"]
     assert drive.battery.available_capacity.value is None
     assert drive.level.value == pytest.approx(50.0)
+
+
+def test_doors_with_nothing_to_report_are_not_summarised_as_closed(vehicle):
+    """A body block the car did not send used to publish "all doors closed".
+
+    The loop skips every absent door, so `any_open` stayed False and the aggregate was set
+    to CLOSED — a reassuring answer invented from no data at all, indistinguishable from a
+    car that really did report six shut doors.
+    """
+    from carconnectivity.doors import Doors
+
+    Connector._apply_doors(vehicle, SimpleNamespace(body=None), datetime.now(tz=timezone.utc))
+
+    assert vehicle.doors.open_state.value is Doors.OpenState.UNKNOWN
+    assert vehicle.doors.lock_state.value is Doors.LockState.UNKNOWN
+
+
+def test_doors_that_do_report_are_still_summarised(vehicle):
+    from carconnectivity.doors import Doors
+
+    body = SimpleNamespace(door_locks=2, front_left_door=2, front_right_door=2, rear_left_door=2,
+                           rear_right_door=2, front_cargo=2, rear_cargo=2)
+    Connector._apply_doors(vehicle, SimpleNamespace(body=body), datetime.now(tz=timezone.utc))
+
+    assert vehicle.doors.open_state.value is Doors.OpenState.CLOSED
+    assert vehicle.doors.lock_state.value is Doors.LockState.LOCKED
+
+    body.rear_left_door = 3  # ajar
+    Connector._apply_doors(vehicle, SimpleNamespace(body=body), datetime.now(tz=timezone.utc))
+    assert vehicle.doors.open_state.value is Doors.OpenState.OPEN

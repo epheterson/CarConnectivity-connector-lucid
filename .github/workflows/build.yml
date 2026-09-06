@@ -2,7 +2,8 @@ name: Build Python Package
 
 # Controls when the action will run. 
 on:
-  # Triggers the workflow on push or pull request events but only for the master branch
+  # Push to main and every tag; pull requests too. The paths list has to include the
+  # tooling files, or a dependency bump to the linters is merged without ever running.
   push:
     branches: [ main ]
     tags:
@@ -11,11 +12,15 @@ on:
      - .github/workflows/build.yml
      - '**.py'
      - 'pyproject.toml'
+     - 'setup_requirements.txt'
+     - 'Makefile'
   pull_request:
     paths:
      - .github/workflows/build.yml
      - '**.py'
      - 'pyproject.toml'
+     - 'setup_requirements.txt'
+     - 'Makefile'
 
 jobs:
   build-python:
@@ -25,9 +30,9 @@ jobs:
         python-version: ['3.12', '3.13', '3.14']
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v7
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install dependencies
@@ -59,9 +64,6 @@ jobs:
     - name: Lint
       run: |
         make lint
-#    - name: Test
-#      run: |
-#        make test
 
 
 

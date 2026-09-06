@@ -37,7 +37,7 @@ CHARGE_DISCHARGING = {19}
 ENERGY_AC, ENERGY_DC, ENERGY_NONE = 1, 2, 5
 
 # LockState: 0 UNKNOWN, 1 UNLOCKED, 2 LOCKED.  DoorState: 0 UNKNOWN, 1 OPEN, 2 CLOSED, 3 AJAR, 4 CLOSE_ERROR.
-LOCK_LOCKED = 2
+LOCK_UNKNOWN, LOCK_UNLOCKED, LOCK_LOCKED = 0, 1, 2
 DOOR_OPEN, DOOR_CLOSED, DOOR_AJAR, DOOR_CLOSE_ERROR = 1, 2, 3, 4
 
 # HvacPower: 0 UNKNOWN, 1 ON, 2 OFF, 3 PRECONDITION, 5 RESIDUAL_HEATING, 6 KEEP_TEMP, 7 HEATSTROKE_PREVENTION.
@@ -127,8 +127,12 @@ def charging_type(energy_type: Optional[int], cs: Optional[int]) -> Charging.Cha
 
 
 def lock_state(door_locks: Optional[int]) -> Doors.LockState:
-    """Lucid LockState int -> Doors.LockState."""
-    if door_locks is None:
+    """Lucid LockState int -> Doors.LockState.
+
+    Proto 0 is UNKNOWN, not unlocked. It used to fall through to UNLOCKED, which is the
+    dangerous direction: a car that reports 0 while waking would be published as unlocked,
+    and anything watching for that transition sends a false alarm about an open car."""
+    if door_locks is None or door_locks == LOCK_UNKNOWN:
         return Doors.LockState.UNKNOWN
     return Doors.LockState.LOCKED if door_locks == LOCK_LOCKED else Doors.LockState.UNLOCKED
 

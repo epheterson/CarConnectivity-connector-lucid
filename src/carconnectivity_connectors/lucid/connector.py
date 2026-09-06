@@ -265,6 +265,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         body = _dig(st, "body")
         sv.doors.lock_state._set_value(mapping.lock_state(_dig(body, "door_locks")), measured=measured)
         any_open = False
+        reported = False
         for door_id, field in mapping.DOORS.items():
             raw = _dig(body, field)
             if raw is None:
@@ -278,7 +279,14 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             door.open_state._set_value(state, measured=measured)
             door.lock_state._set_value(sv.doors.lock_state.value, measured=measured)
             any_open = any_open or state in (Doors.OpenState.OPEN, Doors.OpenState.AJAR)
-        sv.doors.open_state._set_value(Doors.OpenState.OPEN if any_open else Doors.OpenState.CLOSED, measured=measured)
+            reported = True
+        # Only summarise doors that actually reported. Without this a car whose body
+        # block is absent publishes "all doors closed", which is a reassuring answer
+        # invented out of no data at all.
+        if reported:
+            sv.doors.open_state._set_value(Doors.OpenState.OPEN if any_open else Doors.OpenState.CLOSED, measured=measured)
+        else:
+            sv.doors.open_state._set_value(Doors.OpenState.UNKNOWN, measured=measured)
 
     @staticmethod
     def _apply_climate(sv: LucidVehicle, st: Any, measured: datetime) -> None:

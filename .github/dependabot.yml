@@ -1,11 +1,19 @@
 version: 2
 updates:
-  # Maintain dependencies for GitHub Actions
+  # Weekly and grouped. Daily and ungrouped produced six pull requests in one minute on
+  # the day this repo was published, for four linter bumps and two action bumps — enough
+  # noise to hide the one CI failure that mattered.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    groups:
+      dev-tooling:
+        patterns: ["*"]
