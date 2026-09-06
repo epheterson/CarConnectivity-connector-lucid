@@ -12,7 +12,7 @@ dependencies = [
     "carconnectivity>=0.11.5",
     # login_with_refresh_token() is merged upstream but unreleased (last tag v1.1.9).
     # Pin the git ref until nshp cuts a release; see README.
-    "lucidmotors @ git+https://github.com/nshp/python-lucidmotors.git@main",
+    "lucidmotors @ git+https://github.com/nshp/python-lucidmotors.git@13087ad",  # main at 2026-09-05; has login_with_refresh_token(), unreleased upstream
 ]
 readme = "README.md"
 license = "MIT"
