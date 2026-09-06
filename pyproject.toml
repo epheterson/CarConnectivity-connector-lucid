@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "carconnectivity-connector-lucid"
 description = "CarConnectivity connector for Lucid Motors vehicles"
 dynamic = ["version"]
-requires-python = ">=3.10"
+# lucidmotors requires ^3.12, so 3.10 and 3.11 cannot install this at all.
+# Claiming them made pip fail on a dependency instead of refusing cleanly here.
+requires-python = ">=3.12"
 authors = [{ name = "Eric Pheterson" }]
 dependencies = [
     "carconnectivity>=0.11.5",
@@ -20,10 +22,9 @@ license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries",
 ]
 
