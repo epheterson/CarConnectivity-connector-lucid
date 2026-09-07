@@ -142,7 +142,6 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     def fetch_all(self) -> None:
         """First fetch: vehicles and their full state."""
         self.fetch_vehicles()
-        self.car_connectivity.transaction_end()
 
     def update_vehicles(self) -> None:
         """Subsequent polls."""
@@ -150,7 +149,13 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self.fetch_vehicles()
 
     def fetch_vehicles(self) -> None:
-        """Fetch every vehicle on the account, add new ones to the garage, drop ones that disappeared, apply state."""
+        """Fetch every vehicle on the account, add new ones to the garage, drop ones that disappeared, apply state.
+
+        Ends the transaction itself, at the end, on every poll. It used to be the caller's
+        job and only fetch_all did it — which runs once, at startup. Observers registered
+        with on_transaction_end=True therefore heard nothing after that first fetch, and
+        the database plugin's trip agent is one of them, so no drive this connector ever
+        watched became a trip. Doing it here means a new caller cannot forget."""
         garage: Garage = self.car_connectivity.garage
         seen: set[str] = set()
         for lucid_vehicle in self._session.fetch_vehicles():
@@ -173,6 +178,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             gone = garage.get_vehicle(vin)
             if gone is not None and gone.is_managed_by_connector(self):
                 garage.remove_vehicle(vin)
+        # Deliver everything this poll changed to the observers that wait for a whole
+        # update rather than each attribute: notify() has been accumulating their flags
+        # since the last transaction_end, and nothing else calls it.
+        self.car_connectivity.transaction_end()
 
     # -- mapping ---------------------------------------------------------------
     def _apply(self, vehicle: LucidVehicle, lv: Any) -> None:

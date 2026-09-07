@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **No drive this connector watched ever became a trip.** `transaction_end()` was called from `fetch_all()`, which runs once at startup, and not from `update_vehicles()`, which runs on every poll. Observers registered with `on_transaction_end=True` — the database plugin's trip agent among them — therefore heard the first fetch and nothing after it, for the life of the process. States, positions, charging and climate were all recorded normally throughout, which is what made it look like it was working. `fetch_vehicles()` now ends the transaction itself, after applying every vehicle, so a future caller cannot forget.
+
 ## 0.1.3 (2026-09-06)
 
 ### Fixed
