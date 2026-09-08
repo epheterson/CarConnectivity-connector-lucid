@@ -4,6 +4,8 @@ pattern CarConnectivity uses and for parity with other connectors."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from carconnectivity.attributes import SpeedAttribute
+from carconnectivity.units import Speed
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
 
 if TYPE_CHECKING:
@@ -21,6 +23,13 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         else:
             super().__init__(vin=vin, garage=garage, managing_connector=managing_connector, initialization=initialization)
         self.manufacturer._set_value(value='Lucid')  # pylint: disable=protected-access
+        # The car reports how fast it is going and CarConnectivity's model has nowhere to
+        # put it: neither Position nor GenericVehicle carries a speed. SpeedAttribute
+        # exists though, so it hangs here as a connector-specific attribute rather than
+        # being thrown away. Marked connector_custom, the same way `interval` is, so it
+        # is clearly not part of the shared model.
+        self.speed: SpeedAttribute = SpeedAttribute(name="speed", parent=self, unit=Speed.KMH, precision=0.1, minimum=0.0,
+                                                    tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):

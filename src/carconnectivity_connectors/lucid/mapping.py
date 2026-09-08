@@ -7,7 +7,7 @@ a dashboard. Lucid reports km, km/h-looking-but-actually-m/s for speed
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from carconnectivity.charging import Charging
 from carconnectivity.doors import Doors
@@ -164,6 +164,20 @@ def speed_kmh(speed_mps: Optional[float]) -> Optional[float]:
     """Lucid reports chassis.speed in metres per second (proto comment); CarConnectivity wants km/h."""
     v = _f(speed_mps)
     return None if v is None else v * MPS_TO_KMH
+
+
+DRIVING_STATES = (GenericVehicle.State.DRIVING, GenericVehicle.State.IGNITION_ON)
+
+
+def poll_interval(states: Iterable[Optional[GenericVehicle.State]], idle_s: float, driving_s: float) -> float:
+    """How long to wait before the next poll.
+
+    A minute is plenty for a car asleep on a driveway and far too coarse for one moving:
+    at 60 s a drive is a handful of points and a straight line between them, and speed
+    read off consecutive fixes is an average over a mile. Poll faster only while a car is
+    actually going somewhere, which is a small share of any day.
+    """
+    return driving_s if any(s in DRIVING_STATES for s in states) else idle_s
 
 
 DOORS = {

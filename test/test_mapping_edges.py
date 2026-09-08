@@ -175,3 +175,28 @@ def test_every_door_name_points_at_a_distinct_field():
         "frunk",
         "trunk",
     }
+
+
+# ---- how often to poll ------------------------------------------------------
+
+
+def test_a_moving_car_is_polled_more_often():
+    from carconnectivity.vehicle import GenericVehicle
+
+    assert m.poll_interval([GenericVehicle.State.DRIVING], 60, 15) == 15
+    assert m.poll_interval([GenericVehicle.State.IGNITION_ON], 60, 15) == 15, "about to move counts; the first fix of a drive is the one you cannot go back for"
+
+
+def test_a_car_that_is_not_going_anywhere_is_left_alone():
+    from carconnectivity.vehicle import GenericVehicle
+
+    for state in (GenericVehicle.State.OFFLINE, GenericVehicle.State.PARKED, None):
+        assert m.poll_interval([state], 60, 15) == 60, state
+    assert m.poll_interval([], 60, 15) == 60, "no vehicles is not a reason to poll fast"
+
+
+def test_one_moving_car_sets_the_pace_for_the_account():
+    from carconnectivity.vehicle import GenericVehicle
+
+    # One request returns every vehicle, so the fastest car decides.
+    assert m.poll_interval([GenericVehicle.State.PARKED, GenericVehicle.State.DRIVING], 60, 15) == 15

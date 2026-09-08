@@ -77,3 +77,23 @@ def test_doors_that_do_report_are_still_summarised(vehicle):
     body.rear_left_door = 3  # ajar
     Connector._apply_doors(vehicle, SimpleNamespace(body=body), datetime.now(tz=timezone.utc))
     assert vehicle.doors.open_state.value is Doors.OpenState.OPEN
+
+
+def test_speed_is_published_in_kilometres_per_hour(vehicle):
+    """The car reports speed and CarConnectivity's model has nowhere for it, so it hangs
+    on the Lucid vehicle as a connector-specific attribute. The proto is metres per
+    second; publishing it unconverted would understate a motorway by a factor of 3.6 and
+    still look like a speed."""
+    Connector._apply_speed(vehicle, SimpleNamespace(chassis=SimpleNamespace(speed=31.3)), datetime.now(tz=timezone.utc))
+    assert vehicle.speed.value == pytest.approx(112.68)
+    assert vehicle.speed.unit.value == "km/h"
+
+
+def test_a_parked_car_reports_zero_rather_than_nothing(vehicle):
+    Connector._apply_speed(vehicle, SimpleNamespace(chassis=SimpleNamespace(speed=0.0)), datetime.now(tz=timezone.utc))
+    assert vehicle.speed.value == 0.0
+
+
+def test_no_chassis_leaves_speed_unset(vehicle):
+    Connector._apply_speed(vehicle, SimpleNamespace(chassis=None), datetime.now(tz=timezone.utc))
+    assert vehicle.speed.value is None

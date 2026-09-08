@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- Speed. The car reports it in `chassis.speed` and CarConnectivity's model has nowhere to put it, so it hangs on the Lucid vehicle as a `connector_custom` `SpeedAttribute` in km/h rather than being discarded.
+- `driving_interval`, a separate and shorter poll interval used while a car is driving or about to. Defaults to `interval`, so nothing changes unless it is set; minimum 15 seconds. At one poll a minute a drive is a handful of points with straight lines between them, and driving is a small share of any day.
+
 ## 0.1.4 (2026-09-07)
 
 ### Fixed

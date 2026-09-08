@@ -80,6 +80,19 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 raise ValueError('Interval must be at least 60 seconds')
         self.interval._set_value(timedelta(seconds=self.active_config['interval']))  # pylint: disable=protected-access
 
+        # A separate, shorter interval for a car that is moving. At 60 s a drive is a
+        # handful of points with straight lines between them. Defaults to `interval`, so
+        # nothing changes unless it is asked for. The floor is lower than `interval`'s on
+        # purpose: it only applies while driving, which is a small part of any day, and
+        # the account is rate-limited far above that.
+        self.active_config['driving_interval'] = self.active_config['interval']
+        if 'driving_interval' in config:
+            self.active_config['driving_interval'] = int(config['driving_interval'])
+            if self.active_config['driving_interval'] < 15:
+                raise ValueError('Driving interval must be at least 15 seconds')
+            if self.active_config['driving_interval'] > self.active_config['interval']:
+                raise ValueError('Driving interval must not be longer than interval')
+
         self._session = LucidSession(Path(self.active_config['refresh_token_file']).expanduser())
 
     # -- lifecycle -------------------------------------------------------------
@@ -106,6 +119,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                     self.last_update._set_value(value=datetime.now(tz=timezone.utc))  # pylint: disable=protected-access
                     if self.interval.value is not None:
                         interval = self.interval.value.total_seconds()
+                    interval = mapping.poll_interval(self._vehicle_states(), interval, self.active_config['driving_interval'])
                 except Exception:
                     self.connection_state._set_value(value=ConnectionState.ERROR)  # pylint: disable=protected-access
                     if self.interval.value is not None:
@@ -127,6 +141,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 self._stop_event.wait(interval)
         self._session.close()
         self.connection_state._set_value(value=ConnectionState.DISCONNECTED)  # pylint: disable=protected-access
+
+    def _vehicle_states(self) -> list:
+        """The state of each vehicle this connector manages, for choosing the next interval."""
+        return [v.state.value for v in self.car_connectivity.garage.list_vehicles()
+                if v.is_managed_by_connector(self) and v.state.enabled]
 
     def shutdown(self) -> None:
         for vehicle in self.car_connectivity.garage.list_vehicles():
@@ -194,6 +213,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if isinstance(vehicle, LucidElectricVehicle):
             self._apply_charging(vehicle, st, measured)
         self._apply_position(vehicle, st, measured)
+        self._apply_speed(vehicle, st, measured)
         self._apply_doors(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
 
@@ -268,6 +288,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.position.longitude._set_value(lon, measured=measured)
         sv.position.heading._set_value(_f(_dig(gps, "heading_precise")), measured=measured)
         sv.position.position_type._set_value(mapping.position_type(_dig(st, "power")), measured=measured)
+
+    @staticmethod
+    def _apply_speed(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        # chassis.speed is metres per second (the proto says so); SpeedAttribute is km/h.
+        sv.speed._set_value(mapping.speed_kmh(_dig(st, "chassis", "speed")), measured=measured)
 
     @staticmethod
     def _apply_doors(sv: LucidVehicle, st: Any, measured: datetime) -> None:

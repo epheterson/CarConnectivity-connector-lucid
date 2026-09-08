@@ -43,7 +43,8 @@ Mint one once with the library's login example (username + password, interactive
                 "type": "lucid",
                 "config": {
                     "refresh_token_file": "~/.config/lucid-token.json",
-                    "interval": 60
+                    "interval": 60,
+                    "driving_interval": 15
                 }
             }
         ]
@@ -54,5 +55,7 @@ Mint one once with the library's login example (username + password, interactive
 All options in [doc/Config.md](doc/Config.md).
 
 ## Session lifetime — read this if you run it long
+
+`interval` is how often the car is polled, minimum 60 s. `driving_interval` is used instead while a car is driving or about to be, minimum 15 s, defaulting to `interval` so nothing changes unless you ask. A minute is plenty for a car on a driveway and too coarse for one moving: at 60 s a drive is a handful of points with straight lines between them. Driving is a small share of any day, so the extra requests are few.
 
 A Lucid session's bearer token lasts **five minutes** and the server enforces that to the second. The connector refreshes only when under 60 s remain, never on every poll: the refresh endpoint is rate-limited, back-to-back refreshes return the same session anyway, and a client that refreshed per poll was throttled thousands of times before this was measured. Keep `interval` under 240 s or raise the refresh margin.
