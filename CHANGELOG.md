@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 (2026-09-10)
 
 ### Added
 - Speed. The car reports it in `chassis.speed` and CarConnectivity's model has nowhere to put it, so it hangs on the Lucid vehicle as a `connector_custom` `SpeedAttribute` in km/h rather than being discarded.
