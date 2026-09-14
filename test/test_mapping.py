@@ -77,3 +77,28 @@ def test_door_ajar_and_close_error():
 
 def test_energy_none_is_off():
     assert m.charging_type(5, 8) is Charging.ChargingType.OFF
+
+
+def test_a_single_refusal_is_a_blip_not_a_blackout():
+    """Every refusal seen on this account arrived one to six minutes into a drive. The
+    old flat fifteen minutes meant a 1 m 20 s trip cost a quarter of an hour of
+    blindness, which is a worse outcome than the throttle it was responding to. Nobody
+    knows how long the refusal lasts — it may clear at once — so the first retry is
+    soon enough to find out."""
+    assert m.rate_limit_backoff(1) == 5.0
+
+
+def test_it_climbs_through_seconds_before_it_reaches_a_minute():
+    assert [m.rate_limit_backoff(n) for n in (1, 2, 3, 4, 5)] == [5.0, 10.0, 20.0, 40.0, 80.0]
+
+
+def test_it_stops_doubling_at_the_old_fifteen_minutes():
+    """A genuinely exhausted quota still ends up backing off as far as it used to, and
+    reaches it after about twenty minutes of trying rather than on the first refusal."""
+    assert m.rate_limit_backoff(9) == 900.0
+    assert m.rate_limit_backoff(50) == 900.0
+    assert sum(m.rate_limit_backoff(n) for n in range(1, 9)) == 1275.0
+
+
+def test_nothing_to_wait_for_when_nothing_was_refused():
+    assert m.rate_limit_backoff(0) == 0.0

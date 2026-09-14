@@ -106,6 +106,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._stop_event.clear()
         self._session.start()  # the asyncio loop belongs to this thread
         fetch: bool = True
+        self._rate_limited: int = 0
         self.connection_state._set_value(value=ConnectionState.CONNECTING)  # pylint: disable=protected-access
         while not self._stop_event.is_set():
             interval: float = self.active_config['interval']
@@ -126,8 +127,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                         interval = self.interval.value.total_seconds()
                     raise
             except TooManyRequestsError as err:
-                LOG.error('Lucid is rate-limiting this account (%s). Will try again after 15 minutes', str(err))
-                self._stop_event.wait(900)
+                self._rate_limited += 1
+                wait = mapping.rate_limit_backoff(self._rate_limited)
+                LOG.error('Lucid is rate-limiting this account (%s). Will try again after %.0fs', str(err), wait)
+                self._stop_event.wait(wait)
             except (RetrievalError, APICompatibilityError, TemporaryAuthenticationError) as err:
                 LOG.error('Error during update (%s). Will try again after %ss', str(err), interval)
                 self._stop_event.wait(interval)
@@ -137,6 +140,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 self.connection_state._set_value(value=ConnectionState.ERROR)  # pylint: disable=protected-access
                 raise err
             else:
+                # A poll got through, so whatever the account was short of, it has it
+                # again: the next refusal starts from one minute rather than from
+                # wherever the last run of them ended up.
+                self._rate_limited = 0
                 self.connection_state._set_value(value=ConnectionState.CONNECTED)  # pylint: disable=protected-access
                 self._stop_event.wait(interval)
         self._session.close()

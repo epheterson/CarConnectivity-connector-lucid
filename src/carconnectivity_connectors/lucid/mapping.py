@@ -180,6 +180,34 @@ def poll_interval(states: Iterable[Optional[GenericVehicle.State]], idle_s: floa
     return driving_s if any(s in DRIVING_STATES for s in states) else idle_s
 
 
+# What to do when Lucid refuses. It says only RESOURCE_EXHAUSTED, with an empty body:
+# no quota, no retry-after, nothing to read. So the wait is a guess, and the first guess
+# was a flat fifteen minutes, which is far too blunt. Every refusal observed on this
+# account arrived one to six minutes into a drive, and a fifteen-minute silence then
+# costs the whole drive and most of the parking afterwards — a 1 m 20 s trip on
+# 2026-09-12 cost a quarter of an hour of blindness.
+#
+# Nobody knows how long it lasts, and it may well clear at once, so the first wait is
+# five seconds and the ladder climbs through seconds before it reaches a minute:
+# 5, 10, 20, 40, 80, 160, 320, 640, then the old 900 and no further. It resets the
+# moment a poll succeeds.
+#
+# Guessing short costs one wasted call if the account is still short. Guessing long
+# costs the drive. Those are not comparable, which is the whole argument for starting
+# small — and it only became a safe bet once this connector was the sole client on the
+# account, because retrying quickly alongside a second logger would just have spent
+# more of the quota that ran out.
+RATE_LIMIT_FIRST_BACKOFF_S = 5.0
+RATE_LIMIT_MAX_BACKOFF_S = 900.0
+
+
+def rate_limit_backoff(consecutive: int, first: float = RATE_LIMIT_FIRST_BACKOFF_S, cap: float = RATE_LIMIT_MAX_BACKOFF_S) -> float:
+    """How long to wait after being refused, given how many refusals came in a row."""
+    if consecutive < 1:
+        return 0.0
+    return min(first * (2 ** (consecutive - 1)), cap)
+
+
 DOORS = {
     "front_left": "front_left_door",
     "front_right": "front_right_door",
