@@ -81,10 +81,10 @@ def test_doors_that_do_report_are_still_summarised(vehicle):
 
 def test_speed_is_published_in_kilometres_per_hour(vehicle):
     """The car reports speed and CarConnectivity's model has nowhere for it, so it hangs
-    on the Lucid vehicle as a connector-specific attribute. The proto is metres per
-    second; publishing it unconverted would understate a motorway by a factor of 3.6 and
-    still look like a speed."""
-    Connector._apply_speed(vehicle, SimpleNamespace(chassis=SimpleNamespace(speed=31.3)), datetime.now(tz=timezone.utc))
+    on the Lucid vehicle as a connector-specific attribute. chassis.speed is km/h already,
+    whatever the proto's annotation says; converting it as metres per second overstated a
+    neighbourhood drive by 3.6 and still looked like a speed."""
+    Connector._apply_speed(vehicle, SimpleNamespace(chassis=SimpleNamespace(speed=112.68)), datetime.now(tz=timezone.utc))
     assert vehicle.speed.value == pytest.approx(112.68)
     assert vehicle.speed.unit.value == "km/h"
 

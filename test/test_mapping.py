@@ -35,7 +35,7 @@ def test_driving():
 
 
 def test_speed_is_metres_per_second_in_the_proto():
-    assert m.speed_kmh(10.0) == 36.0
+    assert m.speed_kmh(10.0) == 10.0, "chassis.speed is already km/h; the proto's m/s annotation is wrong"
     assert m.speed_kmh(None) is None
 
 

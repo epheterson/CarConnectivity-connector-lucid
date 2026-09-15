@@ -45,7 +45,6 @@ DOOR_OPEN, DOOR_CLOSED, DOOR_AJAR, DOOR_CLOSE_ERROR = 1, 2, 3, 4
 HVAC_OFF = 2
 _HVAC_ACTIVE = {1, 3, 5, 6, 7}
 
-MPS_TO_KMH = 3.6
 TEMP_MIN_C, TEMP_MAX_C = -60.0, 70.0  # a Gravity once reported 109.6 C exterior for two minutes
 
 
@@ -160,10 +159,18 @@ def position_type(power_state: Optional[int]) -> Position.PositionType:
     return Position.PositionType.DRIVING if power_state == POWER_DRIVE else Position.PositionType.PARKING
 
 
-def speed_kmh(speed_mps: Optional[float]) -> Optional[float]:
-    """Lucid reports chassis.speed in metres per second (proto comment); CarConnectivity wants km/h."""
-    v = _f(speed_mps)
-    return None if v is None else v * MPS_TO_KMH
+def speed_kmh(speed: Optional[float]) -> Optional[float]:
+    """chassis.speed, which is already km/h.
+
+    The proto annotates it "in meters/second" and the first version of this believed it,
+    multiplying by 3.6. The car said otherwise: a 1.55-mile drive through a neighbourhood
+    came out at 109, 171, 181 and 152 mph, every moving fix, not an occasional glitch.
+    Read as km/h the same fixes are 30, 47, 50 and 42 — a plausible drive. The bridge
+    that logged this car for a month before the connector did read it as km/h too, and
+    its maxima matched the Teslas' on the same roads. The proto is a reverse-engineered
+    annotation, not Lucid's word; the car's own numbers are.
+    """
+    return _f(speed)
 
 
 DRIVING_STATES = (GenericVehicle.State.DRIVING, GenericVehicle.State.IGNITION_ON)

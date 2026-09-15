@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import logging
 import threading
+import time
 import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -110,6 +111,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self.connection_state._set_value(value=ConnectionState.CONNECTING)  # pylint: disable=protected-access
         while not self._stop_event.is_set():
             interval: float = self.active_config['interval']
+            started = time.monotonic()
             try:
                 try:
                     if fetch:
@@ -117,6 +119,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                         fetch = False
                     else:
                         self.update_vehicles()
+                    LOG.debug('poll took %.1fs', time.monotonic() - started)
                     self.last_update._set_value(value=datetime.now(tz=timezone.utc))  # pylint: disable=protected-access
                     if self.interval.value is not None:
                         interval = self.interval.value.total_seconds()
@@ -145,7 +148,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 # wherever the last run of them ended up.
                 self._rate_limited = 0
                 self.connection_state._set_value(value=ConnectionState.CONNECTED)  # pylint: disable=protected-access
-                self._stop_event.wait(interval)
+                # The interval is the spacing between polls, not the pause after one. A
+                # fetch that takes fifteen seconds followed by a fifteen-second wait is a
+                # thirty-second cycle, and that is what the recorder downstream measured:
+                # 31 s between fixes while driving with this set to 15, 41 s at 20.
+                self._stop_event.wait(max(0.0, interval - (time.monotonic() - started)))
         self._session.close()
         self.connection_state._set_value(value=ConnectionState.DISCONNECTED)  # pylint: disable=protected-access
 
@@ -298,7 +305,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
 
     @staticmethod
     def _apply_speed(sv: LucidVehicle, st: Any, measured: datetime) -> None:
-        # chassis.speed is metres per second (the proto says so); SpeedAttribute is km/h.
+        # chassis.speed is km/h despite what the proto says; see mapping.speed_kmh.
         sv.speed._set_value(mapping.speed_kmh(_dig(st, "chassis", "speed")), measured=measured)
 
     @staticmethod

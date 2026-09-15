@@ -138,13 +138,16 @@ def test_position_type_is_driving_only_while_driving():
         assert m.position_type(state) is Position.PositionType.PARKING, state
 
 
-def test_speed_is_converted_from_metres_per_second():
-    # The proto comment says metres per second and the field is named plainly enough
-    # to be mistaken for km/h. Publishing it unconverted understates a motorway speed
-    # by a factor of 3.6, which still looks like a speed.
+def test_speed_passes_through_as_the_kmh_it_already_is():
+    """The proto says metres per second and the first version multiplied by 3.6. The
+    car disagreed: a 1.55-mile neighbourhood drive came out at 109 to 181 mph on every
+    moving fix. Read as km/h those same fixes are 30 to 50 — a plausible drive — and the
+    bridge that logged this car for a month before the connector read it as km/h too, with
+    maxima that matched the Teslas' on the same roads. A wrong factor here still looks
+    like a speed, which is exactly why it went a week unnoticed."""
     assert m.speed_kmh(0.0) == 0.0
-    assert m.speed_kmh(1.0) == pytest.approx(3.6)
-    assert m.speed_kmh(31.3) == pytest.approx(112.68), "31.3 m/s is about 70 mph"
+    assert m.speed_kmh(1.0) == 1.0
+    assert m.speed_kmh(112.68) == pytest.approx(112.68), "112.68 km/h is about 70 mph"
     assert m.speed_kmh(None) is None
     assert m.speed_kmh("not a number") is None
 
