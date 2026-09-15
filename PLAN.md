@@ -38,3 +38,25 @@ Commands. Images. Trip/charge history (that is EVify's history engine, not a con
 - Tagged v0.1.0 (a5178d2) and shipped as a wheel inside the `carcommand-cc` image on the Mini (CarConnectivity 0.11.11 + database/webui/restapi plugins). Live: connector healthy, connection_state connected, TARS in the garage, WebUI in miles (locale en_US.UTF-8).
 - v0.1.1 (f622e0e): `available_capacity` now comes from `capacity_kwhr`; `kwhr` (energy remaining, tracks SoC) is no longer reported as capacity; `total_capacity` left unset (the car does not report gross). Found because `drives.capacity` read 87.5 of 117.2 at ~75% SoC. Regression test `test/test_apply_drive.py` (630fe10); suite 17 passed, no warnings.
 - Stack, dashboards and registry: `~/vault/docs/plans/2026-09-03-carcommand-sp1-plan.md`.
+
+## Stage 8 — the fields the car sends and this connector throws away (surveyed 2026-09-15)
+
+Probed against the live car, not read off the proto: every value below came back populated on a parked Gravity. The connector publishes about twenty-five attributes; `VehicleState` carries twenty-nine top-level blocks.
+
+| Lucid field | live value | CarConnectivity slot | why it matters |
+|---|---|---|---|
+| `body.charge_port` | `1` | `charging.connector` | the model has the slot and it is empty. Unblocks a plug-in reminder — "you left it unplugged" — which needs nothing but this |
+| `body.window_position` | per-window enum, all `FULLY_CLOSED` | `windows.windows[].open_state` | slot exists and is empty. A windows-left-down alert |
+| `cabin.interior_temp` | `23.4` °C | none — `connector_custom` | cabin temperature. Only Teslas have it downstream today, via TeslaFi |
+| `chassis.*_tire_pressure_bar` + four hard/soft warnings | `2.85` bar (41.3 psi) | none — see tillsteinbach/CarConnectivity#172 | TPMS. The TeslaFi export has no tire field at all, so for this fleet the Lucid is the *only* car that can ever report it |
+| `battery.capacity_kwhr`, `battery.kwhr` | `117.15`, `92.63` | `drives` / custom | usable pack capacity measured rather than assumed from the model name |
+| `battery.battery_health`, `max_cell_temp`, `min_cell_temp` | `1`, `24.4`, `22.6` °C | custom | battery page depth; cell spread is the number that says a pack is unwell |
+| `sentry_state` | `SENTRY_STATE_IDLE` (+ threat level, USB status) | custom | Sentry alerts, and the reason the parked-cost table downstream shows "not enough yet" for this car: nothing records when Sentry is on |
+| `alarm.status`, `alarm.mode` | `2`, `2` | pending #172 | tow vs intrusion vs panic, which `TRIGGERED` alone cannot say |
+| `chassis.headlights`, `hazard_lights` | `3`, `0` | `lights` | slot exists and is empty |
+| `software_update.update_available`, `version_available` | `0`, `0.0.0` | `software` | an update-available notification |
+| `gear_position`, `drive_mode`, `low_power_mode_status` | `1`, `1`, `2` | `state` refinement | drive detection currently leans on `power` alone |
+
+**Order to do them in**, by value over effort: `charging.connector` and `windows` first — both are empty slots in the model, so they need mapping and nothing else. Then `cabin.interior_temp` and `sentry_state` as `connector_custom`, the way `speed` already is. Tire pressures and `alarm` wait on #172, because implementing them before the framework decides its shape means implementing them twice.
+
+**Anticipate more.** This survey found eleven usable blocks in an afternoon, which says the ratio of published to available is roughly two in five, and the remaining blocks (`tcu`, `fault_state`, `notifications`, `trailer_state`, `privacy_mode`) have not been looked at. Two lessons from the 0.1.6 fixes apply to all of it: the proto's comments are reverse-engineered annotations and not Lucid's word, so every unit gets checked against a value the car produces; and a wrong unit still looks like a plausible reading, so "it renders" is not a check.
