@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.6 (2026-09-15)
+
+### Fixed
+- **`chassis.speed` is km/h, not metres per second, so every speed this connector published since v0.1.5 was 3.6x too high.** The protobuf annotates the field "in meters/second" and v0.1.5 believed it. The car disagrees: a 1.55-mile drive through a residential neighbourhood came out at 109, 171, 181 and 152 mph, on every moving fix rather than as an occasional glitch. Read as km/h the same fixes are 30, 47, 50 and 42, which is what that road looks like. A separate client that had logged the same car for a month read the field as km/h and its per-drive maxima matched two Teslas driven on the same roads. The proto comment is a reverse-engineered annotation, not Lucid's word. If you stored speeds from v0.1.5, divide them by 3.6.
+- **`interval` and `driving_interval` are the spacing between polls, not the pause after one.** The loop waited the full interval after each fetch. A sleeping car answers in about a tenth of a second, so this was invisible at rest, but Lucid has to reach a car that is awake and moving and that fetch takes around fifteen seconds — making a 15 s `driving_interval` a 31 s cycle, exactly when the resolution matters. The wait is now the interval less the time the fetch took.
+- **A rate-limit refusal no longer costs a quarter of an hour.** It waited a flat 900 seconds. Every refusal observed on one account arrived one to six minutes into a drive, so that silence swallowed the whole drive and most of the parking after it — a 1 m 20 s trip cost fifteen minutes of blindness. The wait now starts at 5 seconds and doubles — 5, 10, 20, 40, 80, 160, 320, 640 — to the same 900 second ceiling, and resets the moment a poll succeeds. Lucid gives no retry-after and an empty error body, so the wait was always a guess; a short guess costs one wasted call and a long one costs the drive.
+
+### Changed
+- Fetch duration is logged at debug level, so poll cadence can be read off the log instead of inferred from what was recorded downstream.
+- README documents that Lucid rate-limits per account rather than per connection, and what running a second logger against the same credentials costs.
+
 ## 0.1.5 (2026-09-10)
 
 ### Added

@@ -57,6 +57,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
 
         self._background_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        # Consecutive refusals from Lucid, which set how long the next wait is. Reset by
+        # any poll that gets through; see mapping.rate_limit_backoff.
+        self._rate_limited: int = 0
 
         self.connection_state: EnumAttribute[ConnectionState] = EnumAttribute(name="connection_state", parent=self, value_type=ConnectionState,
                                                                               value=ConnectionState.DISCONNECTED, tags={'connector_custom'})
@@ -107,7 +110,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._stop_event.clear()
         self._session.start()  # the asyncio loop belongs to this thread
         fetch: bool = True
-        self._rate_limited: int = 0
+        self._rate_limited = 0
         self.connection_state._set_value(value=ConnectionState.CONNECTING)  # pylint: disable=protected-access
         while not self._stop_event.is_set():
             interval: float = self.active_config['interval']
