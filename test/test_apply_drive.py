@@ -140,4 +140,7 @@ def test_cabin_temperature_and_sentry_are_published(vehicle):
     st.sentry_state.enablement_state = 3
     st.cabin.interior_temp = 109.6  # the exterior sensor once said this for two minutes; the same bound applies
     Connector._apply_cabin(vehicle, st, datetime.now(tz=timezone.utc))
-    assert vehicle.sentry.value is False and vehicle.inside_temperature.value is None
+    assert vehicle.sentry.value is True and vehicle.inside_temperature.value is None  # IDLE is armed
+    st.sentry_state.enablement_state = 2
+    Connector._apply_cabin(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.sentry.value is False

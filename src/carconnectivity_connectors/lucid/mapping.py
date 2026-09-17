@@ -210,18 +210,17 @@ SENTRY_ENABLED, SENTRY_DISABLED, SENTRY_IDLE = 1, 2, 3
 
 
 def sentry_armed(enablement: Optional[int]) -> Optional[bool]:
-    """Whether Sentry is watching. ENABLED is the only value taken as yes.
+    """Whether Sentry is watching: ENABLED or IDLE.
 
-    A parked, locked car on a driveway reported IDLE, which reads as "feature available,
-    not armed" — but it could also mean "armed and nothing happening", and without a
-    session where Sentry was known to be on there is no way to tell from here. Taking
-    ENABLED alone can under-count; taking IDLE as well could claim Sentry was on when it
-    was not, and everything downstream that prices an hour of Sentry would then be
-    pricing nothing. Under-counting is the recoverable mistake. Confirm against a night
-    with Sentry deliberately on before widening this."""
+    IDLE is what a parked, locked car reports while its security is on and nothing is
+    happening — confirmed 2026-09-17 against a car the owner said was secured at the
+    time (Eric: "TARS is halo secure"). The first version took ENABLED alone, on the
+    grounds that under-counting Sentry was the recoverable mistake; with the reading
+    confirmed, that would have priced a night of Sentry as a night of nothing. DISABLED
+    is off; 0 is the car not having said."""
     if enablement is None or enablement == 0:
         return None
-    return enablement == SENTRY_ENABLED
+    return enablement in (SENTRY_ENABLED, SENTRY_IDLE)
 
 
 def hvac_active(power: Optional[int]) -> Optional[bool]:
