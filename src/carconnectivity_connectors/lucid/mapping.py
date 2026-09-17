@@ -205,6 +205,25 @@ def external_power(charge_state: Optional[int]) -> ChargingConnector.ExternalPow
     return ChargingConnector.ExternalPower.ACTIVE if charge_state in CHARGE_CHARGING else ChargingConnector.ExternalPower.AVAILABLE
 
 
+# SentryEnablementState: 0 UNKNOWN, 1 ENABLED, 2 DISABLED, 3 IDLE.
+SENTRY_ENABLED, SENTRY_DISABLED, SENTRY_IDLE = 1, 2, 3
+
+
+def sentry_armed(enablement: Optional[int]) -> Optional[bool]:
+    """Whether Sentry is watching. ENABLED is the only value taken as yes.
+
+    A parked, locked car on a driveway reported IDLE, which reads as "feature available,
+    not armed" — but it could also mean "armed and nothing happening", and without a
+    session where Sentry was known to be on there is no way to tell from here. Taking
+    ENABLED alone can under-count; taking IDLE as well could claim Sentry was on when it
+    was not, and everything downstream that prices an hour of Sentry would then be
+    pricing nothing. Under-counting is the recoverable mistake. Confirm against a night
+    with Sentry deliberately on before widening this."""
+    if enablement is None or enablement == 0:
+        return None
+    return enablement == SENTRY_ENABLED
+
+
 def hvac_active(power: Optional[int]) -> Optional[bool]:
     """None when unknown, else whether climate is doing anything."""
     if power is None or power == 0:

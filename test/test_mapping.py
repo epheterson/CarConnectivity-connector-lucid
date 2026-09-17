@@ -133,3 +133,11 @@ def test_plug_state_comes_from_charge_state_not_the_port_door():
     assert m.external_power(9) is C.ExternalPower.AVAILABLE, "plugged in, complete"
     assert m.external_power(1) is C.ExternalPower.UNAVAILABLE
     assert m.external_power(None) is C.ExternalPower.UNKNOWN
+
+
+def test_sentry_is_only_armed_when_the_car_says_enabled():
+    """IDLE was what a parked, locked car reported, and it is ambiguous. Under-counting
+    Sentry is recoverable; pricing a night of it that never happened is not."""
+    assert m.sentry_armed(1) is True
+    assert m.sentry_armed(2) is False and m.sentry_armed(3) is False
+    assert m.sentry_armed(0) is None and m.sentry_armed(None) is None

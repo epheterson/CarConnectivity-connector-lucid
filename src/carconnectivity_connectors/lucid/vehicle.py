@@ -4,8 +4,8 @@ pattern CarConnectivity uses and for parity with other connectors."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from carconnectivity.attributes import SpeedAttribute
-from carconnectivity.units import Speed
+from carconnectivity.attributes import BooleanAttribute, SpeedAttribute, TemperatureAttribute
+from carconnectivity.units import Speed, Temperature
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
 
 if TYPE_CHECKING:
@@ -30,6 +30,12 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         # is clearly not part of the shared model.
         self.speed: SpeedAttribute = SpeedAttribute(name="speed", parent=self, unit=Speed.KMH, precision=0.1, minimum=0.0,
                                                     tags={'connector_custom'})
+        # Two more the model has no slot for. The cabin temperature sits beside
+        # outside_temperature, which the model does carry; Sentry is a Lucid feature
+        # with no counterpart in the shared model, so it is a plain boolean here.
+        self.inside_temperature: TemperatureAttribute = TemperatureAttribute(name="inside_temperature", parent=self, unit=Temperature.C,
+                                                                              precision=0.1, tags={'connector_custom'})
+        self.sentry: BooleanAttribute = BooleanAttribute(name="sentry", parent=self, tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):

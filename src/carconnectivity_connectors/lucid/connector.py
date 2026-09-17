@@ -234,6 +234,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._apply_speed(vehicle, st, measured)
         self._apply_doors(vehicle, st, measured)
         self._apply_windows(vehicle, st, measured)
+        self._apply_cabin(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
 
     @staticmethod
@@ -370,6 +371,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             sv.windows.open_state._set_value(Windows.OpenState.OPEN if any_open else Windows.OpenState.CLOSED, measured=measured)
         else:
             sv.windows.open_state._set_value(Windows.OpenState.UNKNOWN, measured=measured)
+
+    @staticmethod
+    def _apply_cabin(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """Cabin temperature and whether Sentry is watching; both connector-specific."""
+        sv.inside_temperature._set_value(mapping.plausible_temp(_f(_dig(st, "cabin", "interior_temp"))), measured=measured, unit=Temperature.C)
+        sv.sentry._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enablement_state")), measured=measured)
 
     @staticmethod
     def _apply_climate(sv: LucidVehicle, st: Any, measured: datetime) -> None:

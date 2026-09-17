@@ -130,3 +130,14 @@ def test_plug_state_is_published_with_the_charge(vehicle):
     Connector._apply_charging(vehicle, SimpleNamespace(charging=ch), datetime.now(tz=timezone.utc))
     assert vehicle.charging.connector.connection_state.value is C.ChargingConnectorConnectionState.DISCONNECTED
     assert vehicle.charging.connector.external_power.value is C.ExternalPower.UNAVAILABLE
+
+
+def test_cabin_temperature_and_sentry_are_published(vehicle):
+    st = SimpleNamespace(cabin=SimpleNamespace(interior_temp=23.4, exterior_temp=22.7), sentry_state=SimpleNamespace(enablement_state=1))
+    Connector._apply_cabin(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.inside_temperature.value == pytest.approx(23.4)
+    assert vehicle.sentry.value is True
+    st.sentry_state.enablement_state = 3
+    st.cabin.interior_temp = 109.6  # the exterior sensor once said this for two minutes; the same bound applies
+    Connector._apply_cabin(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.sentry.value is False and vehicle.inside_temperature.value is None
