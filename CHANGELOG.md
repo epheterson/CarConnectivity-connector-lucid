@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.7 (2026-09-17)
 
 ### Added
 - **Cabin temperature** as `inside_temperature`, a connector-specific attribute beside the model's `outside_temperature`, with the same plausibility bound.
