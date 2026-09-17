@@ -33,8 +33,8 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         # Two more the model has no slot for. The cabin temperature sits beside
         # outside_temperature, which the model does carry; Sentry is a Lucid feature
         # with no counterpart in the shared model, so it is a plain boolean here.
-        self.inside_temperature: TemperatureAttribute = TemperatureAttribute(name="inside_temperature", parent=self, unit=Temperature.C,
-                                                                              precision=0.1, tags={'connector_custom'})
+        self.inside_temperature: TemperatureAttribute = TemperatureAttribute(
+            name="inside_temperature", parent=self, unit=Temperature.C, precision=0.1, tags={'connector_custom'})
         self.sentry: BooleanAttribute = BooleanAttribute(name="sentry", parent=self, tags={'connector_custom'})
 
 
