@@ -163,3 +163,12 @@ def test_tire_pressures_and_the_cars_warning_are_published(vehicle):
 def test_no_chassis_block_publishes_no_tire_claims(vehicle):
     Connector._apply_tires(vehicle, SimpleNamespace(chassis=None), datetime.now(tz=timezone.utc))
     assert vehicle.tire_pressure_front_left.value is None and vehicle.tire_warning.value is None
+
+
+def test_threat_battery_and_update_are_published(vehicle):
+    st = SimpleNamespace(cabin=SimpleNamespace(interior_temp=22.0), sentry_state=SimpleNamespace(enablement_state=3, threat_level=3),
+                         battery=SimpleNamespace(capacity_kwhr=117.15, kwhr=92.63, battery_health=1), software_update=SimpleNamespace(update_available=True))
+    Connector._apply_cabin(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.sentry_threat.value is True
+    assert vehicle.battery_capacity_kwh.value == pytest.approx(117.15) and vehicle.battery_energy_kwh.value == pytest.approx(92.63)
+    assert vehicle.battery_health_warning.value is False and vehicle.software_update_available.value is True

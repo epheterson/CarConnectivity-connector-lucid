@@ -51,6 +51,15 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.tire_pressure_rear_right: FloatAttribute = FloatAttribute(
             name="tire_pressure_rear_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
         self.tire_warning: BooleanAttribute = BooleanAttribute(name="tire_warning", parent=self, tags={'connector_custom'})
+        # Sentry's threat level as a boolean — something is happening to the car — and
+        # the battery as the car describes it: pack capacity and energy in kWh, a health
+        # warning flag, and whether a software update is waiting. All connector-specific.
+        self.sentry_threat: BooleanAttribute = BooleanAttribute(name="sentry_threat", parent=self, tags={'connector_custom'})
+        self.battery_capacity_kwh: FloatAttribute = FloatAttribute(
+            name="battery_capacity_kwh", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.battery_energy_kwh: FloatAttribute = FloatAttribute(name="battery_energy_kwh", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.battery_health_warning: BooleanAttribute = BooleanAttribute(name="battery_health_warning", parent=self, tags={'connector_custom'})
+        self.software_update_available: BooleanAttribute = BooleanAttribute(name="software_update_available", parent=self, tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):

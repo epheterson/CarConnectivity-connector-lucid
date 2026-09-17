@@ -149,3 +149,15 @@ def test_a_tire_warning_is_the_cars_judgement_and_unknown_stays_unknown():
     assert m.tire_warning([0, 0, 0, 0]) is None, "no sensor has reported"
     assert m.tire_warning([None, None]) is None
     assert m.tire_warning([0, 1, 0, 0]) is False, "one wheel reporting off is enough to say not-warning"
+
+
+def test_sentry_threat_is_any_level_and_quiet_is_not():
+    for level in (2, 3, 4):
+        assert m.sentry_threat(level) is True, level
+    for quiet in (1, 5):
+        assert m.sentry_threat(quiet) is False, quiet
+    assert m.sentry_threat(0) is None and m.sentry_threat(None) is None
+
+
+def test_a_warning_flag_is_tri_state():
+    assert m.warning_flag(2) is True and m.warning_flag(1) is False and m.warning_flag(0) is None and m.warning_flag(None) is None

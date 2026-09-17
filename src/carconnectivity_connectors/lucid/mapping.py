@@ -248,6 +248,27 @@ def tire_warning(flags: Iterable[Optional[int]]) -> Optional[bool]:
     return False if seen else None
 
 
+# SentryThreat: 0 UNKNOWN, 1 IDLE, 2 LEVEL_ONE, 3 LEVEL_TWO, 4 LEVEL_THREE, 5 NO_THREAT.
+THREAT_LEVELS = {2, 3, 4}
+THREAT_NONE = {1, 5}
+
+
+def sentry_threat(level: Optional[int]) -> Optional[bool]:
+    """Whether Sentry is currently reacting to something, at any level."""
+    if level is None or level == 0:
+        return None
+    return level in THREAT_LEVELS
+
+
+def warning_flag(state: Optional[int]) -> Optional[bool]:
+    """WarningState int -> True on, False off, None not said."""
+    if state == WARNING_ON:
+        return True
+    if state == WARNING_OFF:
+        return False
+    return None
+
+
 def hvac_active(power: Optional[int]) -> Optional[bool]:
     """None when unknown, else whether climate is doing anything."""
     if power is None or power == 0:

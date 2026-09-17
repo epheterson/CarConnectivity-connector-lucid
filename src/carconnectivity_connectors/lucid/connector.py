@@ -378,6 +378,13 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         """Cabin temperature and whether Sentry is watching; both connector-specific."""
         sv.inside_temperature._set_value(mapping.plausible_temp(_f(_dig(st, "cabin", "interior_temp"))), measured=measured, unit=Temperature.C)
         sv.sentry._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enablement_state")), measured=measured)
+        sv.sentry_threat._set_value(mapping.sentry_threat(_dig(st, "sentry_state", "threat_level")), measured=measured)
+        battery = _dig(st, "battery")
+        sv.battery_capacity_kwh._set_value(_f(_dig(battery, "capacity_kwhr")), measured=measured)
+        sv.battery_energy_kwh._set_value(_f(_dig(battery, "kwhr")), measured=measured)
+        sv.battery_health_warning._set_value(mapping.warning_flag(_dig(battery, "battery_health")), measured=measured)
+        update = _dig(st, "software_update", "update_available")
+        sv.software_update_available._set_value(bool(update) if update is not None else None, measured=measured)
 
     @staticmethod
     def _apply_tires(sv: LucidVehicle, st: Any, measured: datetime) -> None:
