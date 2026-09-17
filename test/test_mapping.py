@@ -102,3 +102,34 @@ def test_it_stops_doubling_at_the_old_fifteen_minutes():
 
 def test_nothing_to_wait_for_when_nothing_was_refused():
     assert m.rate_limit_backoff(0) == 0.0
+
+
+def test_every_window_position_lands_in_closed_open_ajar_or_unknown():
+    """Fifteen named positions and a model with four states. Anything between fully
+    closed and fully open is ajar, the two motor positions included: a window backing
+    off an obstruction or dropped a fraction for a door slam is not closed."""
+    from carconnectivity.windows import Windows
+
+    assert m.window_open_state(1) is Windows.OpenState.CLOSED and m.window_open_state(9) is Windows.OpenState.CLOSED
+    assert m.window_open_state(5) is Windows.OpenState.OPEN and m.window_open_state(10) is Windows.OpenState.OPEN
+    for partial in (2, 3, 4, 7, 8, 11, 12, 13, 14):
+        assert m.window_open_state(partial) is Windows.OpenState.AJAR, partial
+    for unknown in (None, 0, 6):
+        assert m.window_open_state(unknown) is Windows.OpenState.UNKNOWN, unknown
+
+
+def test_plug_state_comes_from_charge_state_not_the_port_door():
+    """body.charge_port is a DoorState — the little door, not the cable. ChargeState 1 is
+    NOT_CONNECTED, 0 is unknown like every zero here, and every other value is one a
+    car can only be in with a cable attached."""
+    from carconnectivity.charging import ChargingConnector as C
+
+    assert m.connector_connection_state(None) is C.ChargingConnectorConnectionState.UNKNOWN
+    assert m.connector_connection_state(0) is C.ChargingConnectorConnectionState.UNKNOWN
+    assert m.connector_connection_state(1) is C.ChargingConnectorConnectionState.DISCONNECTED
+    for plugged in (8, 9, 10, 19):
+        assert m.connector_connection_state(plugged) is C.ChargingConnectorConnectionState.CONNECTED, plugged
+    assert m.external_power(8) is C.ExternalPower.ACTIVE, "charging"
+    assert m.external_power(9) is C.ExternalPower.AVAILABLE, "plugged in, complete"
+    assert m.external_power(1) is C.ExternalPower.UNAVAILABLE
+    assert m.external_power(None) is C.ExternalPower.UNKNOWN

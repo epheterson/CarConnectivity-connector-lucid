@@ -97,3 +97,36 @@ def test_a_parked_car_reports_zero_rather_than_nothing(vehicle):
 def test_no_chassis_leaves_speed_unset(vehicle):
     Connector._apply_speed(vehicle, SimpleNamespace(chassis=None), datetime.now(tz=timezone.utc))
     assert vehicle.speed.value is None
+
+
+def test_windows_are_published_per_window_and_summarised(vehicle):
+    from carconnectivity.windows import Windows
+
+    wp = SimpleNamespace(left_front=1, left_rear=1, right_front=1, right_rear=1)
+    Connector._apply_windows(vehicle, SimpleNamespace(body=SimpleNamespace(window_position=wp)), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.open_state.value is Windows.OpenState.CLOSED
+    assert set(vehicle.windows.windows) == {"front_left", "front_right", "rear_left", "rear_right"}
+    wp.right_rear = 12  # vent drop
+    Connector._apply_windows(vehicle, SimpleNamespace(body=SimpleNamespace(window_position=wp)), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.windows["rear_right"].open_state.value is Windows.OpenState.AJAR
+    assert vehicle.windows.open_state.value is Windows.OpenState.OPEN, "one window down is windows down"
+
+
+def test_no_window_block_is_unknown_not_all_closed(vehicle):
+    from carconnectivity.windows import Windows
+
+    Connector._apply_windows(vehicle, SimpleNamespace(body=None), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.open_state.value is Windows.OpenState.UNKNOWN
+
+
+def test_plug_state_is_published_with_the_charge(vehicle):
+    from carconnectivity.charging import ChargingConnector as C
+
+    ch = SimpleNamespace(charge_state=8, energy_type=1, charge_rate_kwh_precise=11.2, charge_rate_mph_precise=30.0, charge_limit_percent=80)
+    Connector._apply_charging(vehicle, SimpleNamespace(charging=ch), datetime.now(tz=timezone.utc))
+    assert vehicle.charging.connector.connection_state.value is C.ChargingConnectorConnectionState.CONNECTED
+    assert vehicle.charging.connector.external_power.value is C.ExternalPower.ACTIVE
+    ch.charge_state = 1
+    Connector._apply_charging(vehicle, SimpleNamespace(charging=ch), datetime.now(tz=timezone.utc))
+    assert vehicle.charging.connector.connection_state.value is C.ChargingConnectorConnectionState.DISCONNECTED
+    assert vehicle.charging.connector.external_power.value is C.ExternalPower.UNAVAILABLE

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-from carconnectivity.charging import Charging
+from carconnectivity.charging import Charging, ChargingConnector
 from carconnectivity.doors import Doors
+from carconnectivity.windows import Windows
 from carconnectivity.position import Position
 from carconnectivity.vehicle import GenericVehicle
 
@@ -145,6 +146,63 @@ def door_open_state(door: Optional[int]) -> Doors.OpenState:
     if door == DOOR_AJAR:
         return Doors.OpenState.AJAR
     return Doors.OpenState.OPEN  # OPEN, and CLOSE_ERROR (a door that failed to close is not closed)
+
+
+# WindowPositionStatus: a fifteen-value ordinal of named positions rather than a
+# percentage. Everything between fully closed and fully open is "ajar" here, including
+# the two motor positions (ATP_REVERSE, the anti-trap back-off, and ANTICLATTER, the
+# slight drop that stops a door slam rattling the glass) — a window in either is not
+# closed, and that is what an alert cares about. See tillsteinbach/CarConnectivity#172
+# for the discussion of carrying the named position alongside; this maps only what the
+# model has a slot for.
+WINDOW_CLOSED = {1, 9}      # FULLY_CLOSED, HARD_STOP_UP
+WINDOW_OPEN = {5, 10}       # FULLY_OPEN, HARD_STOP_DOWN
+WINDOW_UNKNOWN = {0, 6}     # UNKNOWN, UNKNOWN_DE_INITIALIZED
+
+
+def window_open_state(position: Optional[int]) -> Windows.OpenState:
+    """Lucid WindowPositionStatus int -> Windows.OpenState."""
+    if position is None or position in WINDOW_UNKNOWN:
+        return Windows.OpenState.UNKNOWN
+    if position in WINDOW_CLOSED:
+        return Windows.OpenState.CLOSED
+    if position in WINDOW_OPEN:
+        return Windows.OpenState.OPEN
+    return Windows.OpenState.AJAR
+
+
+WINDOWS = {
+    "front_left": "left_front",
+    "front_right": "right_front",
+    "rear_left": "left_rear",
+    "rear_right": "right_rear",
+}
+
+
+def connector_connection_state(charge_state: Optional[int]) -> ChargingConnector.ChargingConnectorConnectionState:
+    """Whether a cable is in, read off ChargeState rather than the charge-port door.
+
+    BodyState.charge_port is a DoorState — the little door, not the cable — so it says
+    nothing about whether the car is plugged in. ChargeState does: 1 is NOT_CONNECTED,
+    0 is UNKNOWN like every other enum's zero here, and every other value, charging or
+    complete or faulted or discharging, is a state a car can only be in with a cable
+    attached. This is the attribute a plug-in reminder waits on."""
+    if charge_state is None or charge_state == 0:
+        return ChargingConnector.ChargingConnectorConnectionState.UNKNOWN
+    if charge_state in CHARGE_NOT_CONNECTED:
+        return ChargingConnector.ChargingConnectorConnectionState.DISCONNECTED
+    return ChargingConnector.ChargingConnectorConnectionState.CONNECTED
+
+
+def external_power(charge_state: Optional[int]) -> ChargingConnector.ExternalPower:
+    """ACTIVE while drawing, AVAILABLE when plugged in and not, UNAVAILABLE when there is
+    no cable, UNKNOWN when the car has not said."""
+    connection = connector_connection_state(charge_state)
+    if connection is ChargingConnector.ChargingConnectorConnectionState.UNKNOWN:
+        return ChargingConnector.ExternalPower.UNKNOWN
+    if connection is ChargingConnector.ChargingConnectorConnectionState.DISCONNECTED:
+        return ChargingConnector.ExternalPower.UNAVAILABLE
+    return ChargingConnector.ExternalPower.ACTIVE if charge_state in CHARGE_CHARGING else ChargingConnector.ExternalPower.AVAILABLE
 
 
 def hvac_active(power: Optional[int]) -> Optional[bool]:

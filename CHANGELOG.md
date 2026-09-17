@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Plug state.** `charging.connector.connection_state` and `charging.connector.external_power`, two slots the CarConnectivity model has always had and this connector left empty. Read off `ChargeState` rather than `body.charge_port`, which is the port's *door* and says nothing about a cable: 1 is `NOT_CONNECTED`, 0 is unknown like every other enum's zero, and every other value — `CABLE_CONNECTED`, the authorisation states, charging, complete, the faults, discharging — is one a car can only be in with a cable attached. External power is `ACTIVE` while drawing, `AVAILABLE` when plugged in and not, `UNAVAILABLE` with no cable. A "you left it unplugged" reminder downstream waits on exactly this.
+- **Windows.** Four `windows.windows[...]` entries plus the summary `windows.open_state`, done the way the doors are: only windows that reported are summarised, so an absent body block is unknown rather than "all closed". Lucid's `WindowPositionStatus` is fifteen named positions, not a percentage; fully closed and the upper hard stop are closed, fully open and the lower hard stop are open, and everything between — the short and long drops, the vent position, the two in-between states, and the two motor positions (anti-trap back-off, the anti-clatter dip) — is ajar, because a window in any of those is not closed and that is what an alert cares about.
+
 ## 0.1.6 (2026-09-15)
 
 ### Fixed

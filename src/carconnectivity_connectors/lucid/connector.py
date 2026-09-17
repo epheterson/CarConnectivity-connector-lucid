@@ -21,6 +21,7 @@ from pathlib import Path
 
 from carconnectivity.attributes import DurationAttribute, EnumAttribute
 from carconnectivity.doors import Doors
+from carconnectivity.windows import Windows
 from carconnectivity.drive import ElectricDrive, GenericDrive
 from carconnectivity.enums import ConnectionState
 from carconnectivity.errors import APICompatibilityError, AuthenticationError, RetrievalError, \
@@ -232,6 +233,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._apply_position(vehicle, st, measured)
         self._apply_speed(vehicle, st, measured)
         self._apply_doors(vehicle, st, measured)
+        self._apply_windows(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
 
     @staticmethod
@@ -294,6 +296,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         limit = _f(_dig(ch, "charge_limit_percent"))
         if limit is not None:
             sv.charging.settings.target_level._set_value(limit, measured=measured)
+        # Whether a cable is in, and whether it is delivering. Read off the charge state
+        # rather than body.charge_port, which is the port's door and says nothing about
+        # a cable. A plug-in reminder downstream waits on exactly this attribute.
+        sv.charging.connector.connection_state._set_value(mapping.connector_connection_state(cs), measured=measured)
+        sv.charging.connector.external_power._set_value(mapping.external_power(cs), measured=measured)
 
     @staticmethod
     def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -338,6 +345,31 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             sv.doors.open_state._set_value(Doors.OpenState.OPEN if any_open else Doors.OpenState.CLOSED, measured=measured)
         else:
             sv.doors.open_state._set_value(Doors.OpenState.UNKNOWN, measured=measured)
+
+    @staticmethod
+    def _apply_windows(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """Four windows, the same way the doors are done: only the ones that reported
+        are summarised, so an absent body block is "unknown" rather than "all closed"."""
+        positions = _dig(st, "body", "window_position")
+        any_open = False
+        reported = False
+        for window_id, field in mapping.WINDOWS.items():
+            raw = _dig(positions, field)
+            if raw is None:
+                continue
+            if window_id in sv.windows.windows:
+                window = sv.windows.windows[window_id]
+            else:
+                window = Windows.Window(window_id=window_id, windows=sv.windows, initialization=sv.windows.get_initialization(window_id))
+                sv.windows.windows[window_id] = window
+            state = mapping.window_open_state(raw)
+            window.open_state._set_value(state, measured=measured)
+            any_open = any_open or state in (Windows.OpenState.OPEN, Windows.OpenState.AJAR)
+            reported = True
+        if reported:
+            sv.windows.open_state._set_value(Windows.OpenState.OPEN if any_open else Windows.OpenState.CLOSED, measured=measured)
+        else:
+            sv.windows.open_state._set_value(Windows.OpenState.UNKNOWN, measured=measured)
 
     @staticmethod
     def _apply_climate(sv: LucidVehicle, st: Any, measured: datetime) -> None:
