@@ -42,10 +42,14 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         # the car's own — the proto carries no target pressure, so no threshold is
         # applied here; a placard is per car, per tyre size, sometimes per axle, and
         # getting it wrong tells someone a low tire is fine.
-        self.tire_pressure_front_left: FloatAttribute = FloatAttribute(name="tire_pressure_front_left", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
-        self.tire_pressure_front_right: FloatAttribute = FloatAttribute(name="tire_pressure_front_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
-        self.tire_pressure_rear_left: FloatAttribute = FloatAttribute(name="tire_pressure_rear_left", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
-        self.tire_pressure_rear_right: FloatAttribute = FloatAttribute(name="tire_pressure_rear_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_front_left: FloatAttribute = FloatAttribute(
+            name="tire_pressure_front_left", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_front_right: FloatAttribute = FloatAttribute(
+            name="tire_pressure_front_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_rear_left: FloatAttribute = FloatAttribute(
+            name="tire_pressure_rear_left", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_rear_right: FloatAttribute = FloatAttribute(
+            name="tire_pressure_rear_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
         self.tire_warning: BooleanAttribute = BooleanAttribute(name="tire_warning", parent=self, tags={'connector_custom'})
 
 

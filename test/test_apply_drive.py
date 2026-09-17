@@ -147,7 +147,8 @@ def test_cabin_temperature_and_sentry_are_published(vehicle):
 
 
 def test_tire_pressures_and_the_cars_warning_are_published(vehicle):
-    ch = SimpleNamespace(front_left_tire_pressure_bar=2.85, front_right_tire_pressure_bar=2.85, rear_left_tire_pressure_bar=2.85, rear_right_tire_pressure_bar=2.34,
+    ch = SimpleNamespace(front_left_tire_pressure_bar=2.85, front_right_tire_pressure_bar=2.85,
+                         rear_left_tire_pressure_bar=2.85, rear_right_tire_pressure_bar=2.34,
                          hard_warn_left_front=1, hard_warn_left_rear=1, hard_warn_right_front=1, hard_warn_right_rear=1,
                          soft_warn_left_front=1, soft_warn_left_rear=1, soft_warn_right_front=1, soft_warn_right_rear=2)
     Connector._apply_tires(vehicle, SimpleNamespace(chassis=ch), datetime.now(tz=timezone.utc))
