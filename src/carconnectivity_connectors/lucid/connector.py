@@ -235,6 +235,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._apply_doors(vehicle, st, measured)
         self._apply_windows(vehicle, st, measured)
         self._apply_cabin(vehicle, st, measured)
+        self._apply_tires(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
 
     @staticmethod
@@ -377,6 +378,15 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         """Cabin temperature and whether Sentry is watching; both connector-specific."""
         sv.inside_temperature._set_value(mapping.plausible_temp(_f(_dig(st, "cabin", "interior_temp"))), measured=measured, unit=Temperature.C)
         sv.sentry._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enablement_state")), measured=measured)
+
+    @staticmethod
+    def _apply_tires(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """Four pressures in bar and the car's own warning, from ChassisState."""
+        chassis = _dig(st, "chassis")
+        for wheel in mapping.TIRES:
+            getattr(sv, f"tire_pressure_{wheel}")._set_value(_f(_dig(chassis, f"{wheel}_tire_pressure_bar")), measured=measured)
+        flags = [_dig(chassis, f"{kind}_warn_{side}") for kind in ("hard", "soft") for side in ("left_front", "left_rear", "right_front", "right_rear")]
+        sv.tire_warning._set_value(mapping.tire_warning(flags), measured=measured)
 
     @staticmethod
     def _apply_climate(sv: LucidVehicle, st: Any, measured: datetime) -> None:

@@ -141,3 +141,11 @@ def test_sentry_is_armed_on_enabled_or_idle():
     assert m.sentry_armed(1) is True and m.sentry_armed(3) is True
     assert m.sentry_armed(2) is False
     assert m.sentry_armed(0) is None and m.sentry_armed(None) is None
+
+
+def test_a_tire_warning_is_the_cars_judgement_and_unknown_stays_unknown():
+    assert m.tire_warning([1, 1, 2, 1]) is True, "one wheel warning is a warning"
+    assert m.tire_warning([1, 1, 1, 1, 1, 1, 1, 1]) is False
+    assert m.tire_warning([0, 0, 0, 0]) is None, "no sensor has reported"
+    assert m.tire_warning([None, None]) is None
+    assert m.tire_warning([0, 1, 0, 0]) is False, "one wheel reporting off is enough to say not-warning"

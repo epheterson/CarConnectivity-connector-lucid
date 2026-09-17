@@ -144,3 +144,21 @@ def test_cabin_temperature_and_sentry_are_published(vehicle):
     st.sentry_state.enablement_state = 2
     Connector._apply_cabin(vehicle, st, datetime.now(tz=timezone.utc))
     assert vehicle.sentry.value is False
+
+
+def test_tire_pressures_and_the_cars_warning_are_published(vehicle):
+    ch = SimpleNamespace(front_left_tire_pressure_bar=2.85, front_right_tire_pressure_bar=2.85, rear_left_tire_pressure_bar=2.85, rear_right_tire_pressure_bar=2.34,
+                         hard_warn_left_front=1, hard_warn_left_rear=1, hard_warn_right_front=1, hard_warn_right_rear=1,
+                         soft_warn_left_front=1, soft_warn_left_rear=1, soft_warn_right_front=1, soft_warn_right_rear=2)
+    Connector._apply_tires(vehicle, SimpleNamespace(chassis=ch), datetime.now(tz=timezone.utc))
+    assert vehicle.tire_pressure_rear_right.value == pytest.approx(2.34)
+    assert vehicle.tire_pressure_front_left.value == pytest.approx(2.85)
+    assert vehicle.tire_warning.value is True, "a soft warning on one wheel is a warning"
+    ch.soft_warn_right_rear = 1
+    Connector._apply_tires(vehicle, SimpleNamespace(chassis=ch), datetime.now(tz=timezone.utc))
+    assert vehicle.tire_warning.value is False
+
+
+def test_no_chassis_block_publishes_no_tire_claims(vehicle):
+    Connector._apply_tires(vehicle, SimpleNamespace(chassis=None), datetime.now(tz=timezone.utc))
+    assert vehicle.tire_pressure_front_left.value is None and vehicle.tire_warning.value is None

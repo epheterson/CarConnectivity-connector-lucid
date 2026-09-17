@@ -223,6 +223,31 @@ def sentry_armed(enablement: Optional[int]) -> Optional[bool]:
     return enablement in (SENTRY_ENABLED, SENTRY_IDLE)
 
 
+# ChassisState carries four pressures in bar and, per wheel, a hard and a soft warning
+# (WarningState: 0 unknown, 1 off, 2 on). There is no target pressure anywhere in the
+# proto, so "low" is the car's own judgement, not a threshold applied here.
+WARNING_ON, WARNING_OFF = 2, 1
+TIRES = {
+    "front_left": "front_left",
+    "front_right": "front_right",
+    "rear_left": "rear_left",
+    "rear_right": "rear_right",
+}
+
+
+def tire_warning(flags: Iterable[Optional[int]]) -> Optional[bool]:
+    """Any tire the car is warning about. True if any flag is on, False if every flag
+    that reported is off, None if none reported. A car that has not said is not a car
+    with a flat."""
+    seen = False
+    for flag in flags:
+        if flag == WARNING_ON:
+            return True
+        if flag == WARNING_OFF:
+            seen = True
+    return False if seen else None
+
+
 def hvac_active(power: Optional[int]) -> Optional[bool]:
     """None when unknown, else whether climate is doing anything."""
     if power is None or power == 0:

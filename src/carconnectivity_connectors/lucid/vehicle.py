@@ -4,7 +4,7 @@ pattern CarConnectivity uses and for parity with other connectors."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
-from carconnectivity.attributes import BooleanAttribute, SpeedAttribute, TemperatureAttribute
+from carconnectivity.attributes import BooleanAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
 from carconnectivity.units import Speed, Temperature
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
 
@@ -36,6 +36,17 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.inside_temperature: TemperatureAttribute = TemperatureAttribute(
             name="inside_temperature", parent=self, unit=Temperature.C, precision=0.1, tags={'connector_custom'})
         self.sentry: BooleanAttribute = BooleanAttribute(name="sentry", parent=self, tags={'connector_custom'})
+        # Tire pressures, in bar as the car reports them: CarConnectivity has no pressure
+        # unit yet (tillsteinbach/CarConnectivity#172 is where a TPMS model is being
+        # discussed), so these are plain floats named for what they hold. The warning is
+        # the car's own — the proto carries no target pressure, so no threshold is
+        # applied here; a placard is per car, per tyre size, sometimes per axle, and
+        # getting it wrong tells someone a low tire is fine.
+        self.tire_pressure_front_left: FloatAttribute = FloatAttribute(name="tire_pressure_front_left", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_front_right: FloatAttribute = FloatAttribute(name="tire_pressure_front_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_rear_left: FloatAttribute = FloatAttribute(name="tire_pressure_rear_left", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_pressure_rear_right: FloatAttribute = FloatAttribute(name="tire_pressure_rear_right", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
+        self.tire_warning: BooleanAttribute = BooleanAttribute(name="tire_warning", parent=self, tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):
