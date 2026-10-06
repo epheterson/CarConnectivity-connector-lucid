@@ -8,6 +8,9 @@
 # `lucidmotors @ git+...` — which it must, until upstream releases the refresh-token
 # login it depends on — an upload cannot succeed, and a tag failing here would look like
 # a broken release rather than a known wait.
+# When it does publish, the release carries a GitHub build-provenance attestation
+#   gh attestation verify dist/<file> --repo epheterson/CarConnectivity-connector-lucid
+# and an SPDX SBOM (the `sbom` workflow artifact).
 name: Publish to PyPI
 
 on:
@@ -24,10 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write # trusted publishing
+      contents: read
+      id-token: write # trusted publishing, and the provenance attestation's signing identity
+      attestations: write # store the provenance attestation
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -51,5 +58,19 @@ jobs:
           python -m pip install twine
           python -m twine check dist/*
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Attest build provenance
+        if: env.skip != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+      - name: Generate SBOM
+        if: env.skip != 'true'
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: sbom
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         if: env.skip != 'true'
