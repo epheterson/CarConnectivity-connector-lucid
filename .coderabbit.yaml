@@ -1,0 +1,67 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Independent review of each PR, once, when it opens; comment
+# `@coderabbitai review` for another pass after later pushes. Advisory, never
+# a required check: findings are fixed or answered like any outside
+# contribution. Kept quiet: no summary written into the PR description, no
+# walkthrough extras.
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: false
+  poem: false
+  review_status: false
+  in_progress_fortune: false
+  collapse_walkthrough: true
+  changed_files_summary: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: false
+    drafts: false
+  path_filters:
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.gif"
+    - "!**/*.whl"
+    - "!**/*.tar.gz"
+  path_instructions:
+    - path: "src/**"
+      instructions: >-
+        CarConnectivity connector for Lucid vehicles over python-lucidmotors.
+        It is read-only: flag any call that sends a command or could wake the
+        car (auto_wake must never be set). The refresh token is read from a
+        file and must never be logged, written, put in an exception message or
+        sent anywhere but Lucid's API. Vehicle location and VINs stay inside
+        the CarConnectivity model: flag any new network destination, telemetry
+        or log line that would carry them out.
+    - path: "src/carconnectivity_connectors/lucid/auth/**"
+      instructions: >-
+        Session lifecycle. Token refreshes are throttled server-side
+        (RESOURCE_EXHAUSTED); check that refresh happens only when the session
+        is near expiry, that failures back off rather than loop, and that no
+        token or credential reaches a log at any level.
+    - path: "src/carconnectivity_connectors/lucid/mapping.py"
+      instructions: >-
+        Pure mapping from Lucid's protobuf enums and units (kilometres, Celsius)
+        to CarConnectivity's model. Check unit conversions, unknown enum values
+        degrading to None rather than raising, and that a sleeping car is never
+        reported as awake.
+    - path: "test/**"
+      instructions: >-
+        Tests must use made-up VINs, tokens and coordinates, never real ones.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Actions must be pinned to full commit SHAs with least-privilege
+        permissions. Publishing is PyPI trusted publishing on a version tag;
+        the guard that refuses direct-reference dependencies must stay.
+chat:
+  auto_reply: true
