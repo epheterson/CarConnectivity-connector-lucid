@@ -4,11 +4,10 @@
 # (owner epheterson, repository CarConnectivity-connector-lucid, workflow publish.yml,
 # environment pypi).
 #
-# The guard exists because PyPI rejects direct references. While this package pins
-# `lucidmotors @ git+...` — which it must, until upstream releases the refresh-token
-# login it depends on — an upload cannot succeed, and a tag failing here would look like
-# a broken release rather than a known wait.
-# When it does publish, the release carries a GitHub build-provenance attestation
+# The guard exists because PyPI rejects direct references: a `name @ git+...`
+# dependency would fail the upload, and a tag failing here would look like a broken
+# release rather than a known limit.
+# Each release carries a GitHub build-provenance attestation
 #   gh attestation verify dist/<file> --repo epheterson/CarConnectivity-connector-lucid
 # and an SPDX SBOM (the `sbom` workflow artifact).
 name: Publish to PyPI
@@ -42,7 +41,7 @@ jobs:
         run: |
           if grep -qE '^\s*"[^"]+ @ (git\+|https?://)' pyproject.toml; then
             echo "::notice::pyproject.toml still has a direct reference dependency, which PyPI rejects."
-            echo "::notice::Waiting on an upstream lucidmotors release; see the README. Not publishing."
+            echo "::notice::Not publishing."
             echo "skip=true" >> "$GITHUB_ENV"
           fi
 

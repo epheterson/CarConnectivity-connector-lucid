@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- **`lucidmotors` from PyPI, 1.4.2 or later**, instead of a pinned upstream commit. That release carries the refresh-token login this connector depends on, retries a throttled token refresh instead of failing on the first refusal, and names the Tesla charging vendor (4). With no direct-reference dependency left, a tag now publishes this package to PyPI.
+
 ### Added
 - **Sentry threat** as a boolean: true at any threat level, false when idle or explicitly no-threat. This is the attribute a "Sentry triggered" alert waits on; the armed/not-armed state shipped in 0.1.7.
 - **The battery as the car describes it**: `battery_capacity_kwh` and `battery_energy_kwh` from the pack's own figures (117.15 and 92.63 on the car this was written against), and `battery_health_warning` from the car's flag. A logger that has the pack's own capacity does not have to assume one from the model name.

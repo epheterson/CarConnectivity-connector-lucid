@@ -9,21 +9,13 @@ A [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity) connector 
 Verified against a 2026 Gravity on 2026-09-03.
 
 
-## Installing
-
-```
-pip install "carconnectivity-connector-lucid @ git+https://github.com/epheterson/CarConnectivity-connector-lucid@v0.1.3"
-```
-
-Python 3.12 or newer. Not on PyPI yet: this package depends on `lucidmotors` at an unreleased upstream commit, for `login_with_refresh_token()`, and PyPI rejects direct-reference dependencies. The moment [nshp/python-lucidmotors](https://github.com/nshp/python-lucidmotors) cuts a release containing it, the dependency becomes an ordinary version specifier and a tag publishes to PyPI automatically.
-
 ## Install
 
 ```
-pip install git+https://github.com/epheterson/CarConnectivity-connector-lucid.git
+pip install carconnectivity-connector-lucid
 ```
 
-Until `python-lucidmotors` cuts a release that includes `login_with_refresh_token()` (merged, unreleased as of v1.1.9), this package pins that library to a git ref. That is deliberate: the refresh-token login is what lets the connector run with **no password on disk**.
+Python 3.12 or newer. The connector logs in with a refresh token only (`login_with_refresh_token()`, in `lucidmotors` 1.4.2 and later), so there is **no password on disk**.
 
 ## Credentials
 

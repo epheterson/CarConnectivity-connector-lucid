@@ -12,9 +12,8 @@ requires-python = ">=3.12"
 authors = [{ name = "Eric Pheterson" }]
 dependencies = [
     "carconnectivity>=0.11.5",
-    # login_with_refresh_token() is merged upstream but unreleased (last tag v1.1.9).
-    # Pin the git ref until nshp cuts a release; see README.
-    "lucidmotors @ git+https://github.com/nshp/python-lucidmotors.git@13087ad",  # main at 2026-09-05; has login_with_refresh_token(), unreleased upstream
+    # 1.4.2: login_with_refresh_token(), backoff on a throttled token refresh, CHARGING_VENDOR_TESLA.
+    "lucidmotors>=1.4.2,<2",
 ]
 readme = "README.md"
 keywords = ["lucid", "carconnectivity", "ev", "telemetry", "connector"]
