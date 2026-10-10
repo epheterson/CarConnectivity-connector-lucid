@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.8 (2026-10-09)
 
 ### Changed
 - **`lucidmotors` from PyPI, 1.4.2 or later**, instead of a pinned upstream commit. That release carries the refresh-token login this connector depends on, retries a throttled token refresh instead of failing on the first refusal, and names the Tesla charging vendor (4). With no direct-reference dependency left, a tag now publishes this package to PyPI.
