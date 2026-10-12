@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -25,6 +26,10 @@ from carconnectivity.errors import AuthenticationError, RetrievalError, Temporar
 LOG = logging.getLogger("carconnectivity.connectors.lucid.auth")
 
 REFRESH_MARGIN_S = 60.0  # must exceed the poll interval; 60 s min interval -> refresh has 2x margin on a 300 s token
+WAKE_SETTLE_S = 8.0  # a car that was asleep needs a moment after WakeupVehicle before it takes a command
+# The library sets no deadline on a command. Without one a call Lucid never answers holds
+# the session lock, and the poller with it, for good.
+COMMAND_TIMEOUT_S = 60.0
 
 
 def load_refresh_token(path: Path) -> str:
@@ -51,45 +56,56 @@ def translate_api_error(exc: BaseException) -> Exception:
 
 
 class LucidSession:
-    """Owns the asyncio loop and the LucidAPI. Everything is called from the
-    connector's background thread via `run()`."""
+    """Owns the asyncio loop and the LucidAPI. The poller calls it from the connector's
+    background thread; commands arrive on other threads (the REST or MQTT plugin's). Both
+    go through `run()`, which serialises them: a loop cannot run two coroutines from two
+    threads at once, and a second login is exactly what must not happen."""
 
     def __init__(self, token_path: Path, api_factory: Optional[Callable[[], Any]] = None) -> None:
         self._token_path = token_path
         self._api_factory = api_factory
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._api: Any = None
+        self._lock = threading.RLock()
+        self._wake_settle_s = WAKE_SETTLE_S
+        self._command_timeout_s = COMMAND_TIMEOUT_S
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
         """Create the event loop; call from the thread that will own it."""
-        self._loop = asyncio.new_event_loop()
+        with self._lock:
+            self._loop = asyncio.new_event_loop()
 
     def close(self) -> None:
         """Close the API and the loop."""
-        if self._loop is None:
-            return
-        if self._api is not None:
-            try:
-                self._loop.run_until_complete(self._api.close())
-            except Exception:  # pylint: disable=broad-except
-                LOG.debug("error closing Lucid API", exc_info=True)
-            self._api = None
-        self._loop.close()
-        self._loop = None
+        with self._lock:
+            if self._loop is None:
+                return
+            if self._api is not None:
+                try:
+                    self._loop.run_until_complete(self._api.close())
+                except Exception:  # pylint: disable=broad-except
+                    LOG.debug("error closing Lucid API", exc_info=True)
+                self._api = None
+            self._loop.close()
+            self._loop = None
 
     def run(self, coro):
-        """Run a coroutine on this session's loop."""
-        if self._loop is None:
-            raise RuntimeError("LucidSession.start() not called")
-        return self._loop.run_until_complete(coro)
+        """Run a coroutine on this session's loop; callers on other threads wait their turn."""
+        with self._lock:
+            if self._loop is None:
+                coro.close()
+                raise RuntimeError("LucidSession.start() not called")
+            return self._loop.run_until_complete(coro)
 
     # -- auth ----------------------------------------------------------------
     def _make_api(self):
         if self._api_factory is not None:
             return self._api_factory()
         from lucidmotors import LucidAPI  # pylint: disable=import-outside-toplevel
-        return LucidAPI()
+        # Spelled out although it is the default: with it on, the library wakes the car
+        # before every command on its own, and only command() decides that here.
+        return LucidAPI(auto_wake=False)
 
     async def _ensure(self):
         if self._api is None:
@@ -127,3 +143,24 @@ class LucidSession:
             except Exception as exc:  # pylint: disable=broad-except
                 raise translate_api_error(exc) from exc
         return self.run(_go())
+
+    def command(self, lucid_vehicle: Any, action: Callable[[Any, Any], Any], wake: bool = True) -> None:
+        """Run one vehicle command on the shared API and loop. Callable from any thread.
+
+        The only path that wakes the car. A car the last poll saw asleep is woken
+        explicitly, once, and given WAKE_SETTLE_S to listen. The command itself is sent
+        once: nothing here retries it, because a retried unlock or trunk is a second
+        unlock or trunk if the first one landed and only its answer was lost."""
+        async def _go():
+            api = await self._ensure()  # raises CarConnectivity errors already
+            try:
+                if wake and not api.vehicle_is_awake(lucid_vehicle):
+                    LOG.info("vehicle is asleep, waking it for a command")
+                    await asyncio.wait_for(api.wakeup_vehicle(lucid_vehicle), self._command_timeout_s)
+                    await asyncio.sleep(self._wake_settle_s)
+                await asyncio.wait_for(action(api, lucid_vehicle), self._command_timeout_s)
+            except asyncio.TimeoutError as exc:
+                raise RetrievalError(f"no answer from Lucid within {self._command_timeout_s:.0f}s; check the car before trying again") from exc
+            except Exception as exc:  # pylint: disable=broad-except
+                raise translate_api_error(exc) from exc
+        self.run(_go())
