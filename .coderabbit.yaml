@@ -20,6 +20,7 @@ reviews:
   sequence_diagrams: false
   estimate_code_review_effort: false
   related_issues: false
+  assess_linked_issues: false
   related_prs: false
   suggested_labels: false
   suggested_reviewers: false
@@ -37,8 +38,9 @@ reviews:
     - path: "src/**"
       instructions: >-
         CarConnectivity connector for Lucid vehicles over python-lucidmotors.
-        It is read-only: flag any call that sends a command or could wake the
-        car (auto_wake must never be set). The refresh token is read from a
+        It is read-only unless commands are enabled in config; flag any command
+        path reachable when disabled. Only a command may wake the car, never a
+        read (auto_wake must never be set). The refresh token is read from a
         file and must never be logged, written, put in an exception message or
         sent anywhere but Lucid's API. Vehicle location and VINs stay inside
         the CarConnectivity model: flag any new network destination, telemetry
