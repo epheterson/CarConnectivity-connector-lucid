@@ -3,10 +3,16 @@
 Writing into the model goes through GenericAttribute._set_value(), which is the
 CarConnectivity convention for connectors; hence the module-wide disable.
 
-Read-only. Polls the same mobile gRPC API the Lucid app uses, via
-python-lucidmotors, and populates the CarConnectivity model. Reads never wake
-the car (the library only wakes on commands with auto_wake=True, which this
-never sets), so polling costs nothing in vampire drain.
+Polls the same mobile gRPC API the Lucid app uses, via python-lucidmotors, and
+populates the CarConnectivity model. Reads never wake the car (the library only
+wakes on commands with auto_wake=True, which this never sets), so polling costs
+nothing in vampire drain.
+
+Read-only unless the config says `"commands": true`. Then, and only then, each
+vehicle gets CarConnectivity commands (charging, charge limit, climatization,
+defrost, locks, trunk and frunk, lights and horn, wake) as set-hooks that run on
+the caller's thread through the poller's own session. They are the only thing
+that ever wakes the car, and they do it explicitly (LucidSession.command).
 """
 # pylint: disable=protected-access
 from __future__ import annotations
@@ -19,13 +25,15 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from carconnectivity.attributes import DurationAttribute, EnumAttribute
+from carconnectivity.attributes import DurationAttribute, EnumAttribute, GenericAttribute
+from carconnectivity.command_impl import ChargingStartStopCommand, ClimatizationStartStopCommand, HonkAndFlashCommand, \
+    LockUnlockCommand, WakeSleepCommand, WindowHeatingStartStopCommand
 from carconnectivity.doors import Doors
 from carconnectivity.windows import Windows
 from carconnectivity.drive import ElectricDrive, GenericDrive
 from carconnectivity.enums import ConnectionState
-from carconnectivity.errors import APICompatibilityError, AuthenticationError, RetrievalError, \
-    TemporaryAuthenticationError, TooManyRequestsError
+from carconnectivity.errors import APICompatibilityError, AuthenticationError, CommandError, RetrievalError, \
+    SetterError, TemporaryAuthenticationError, TooManyRequestsError
 from carconnectivity.garage import Garage
 from carconnectivity.units import Energy, Length, Power, Speed, Temperature
 from carconnectivity.util import config_remove_credentials
@@ -34,11 +42,11 @@ from carconnectivity.vehicle import GenericVehicle
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession
-from carconnectivity_connectors.lucid.vehicle import LucidElectricVehicle, LucidVehicle
+from carconnectivity_connectors.lucid.vehicle import LucidElectricVehicle, LucidVehicle, OpenCloseCommand
 from carconnectivity_connectors.lucid._version import __version__
 
 if TYPE_CHECKING:
-    from typing import Any, Dict, Optional
+    from typing import Any, Awaitable, Callable, Dict, Optional, Union
     from carconnectivity.carconnectivity import CarConnectivity
 
 LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.lucid")
@@ -46,6 +54,15 @@ LOG_API: logging.Logger = logging.getLogger("carconnectivity.connectors.lucid-ap
 
 _dig = mapping._dig  # pylint: disable=protected-access
 _f = mapping._f  # pylint: disable=protected-access
+
+# The charge limit the Lucid app offers, whole percent.
+CHARGE_LIMIT_MIN, CHARGE_LIMIT_MAX = 50, 100
+# Plausible cabin set-points in Celsius: a guard against a unit mix-up (68 sent as C),
+# not a claim about what the car accepts.
+CABIN_TEMP_MIN_C, CABIN_TEMP_MAX_C = 10.0, 35.0
+# The car takes a moment to report what a command did; poll once soon after rather
+# than waiting out the interval. One extra read, which never wakes the car.
+REFRESH_AFTER_COMMAND_S = 6.0
 
 
 class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
@@ -61,6 +78,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # Consecutive refusals from Lucid, which set how long the next wait is. Reset by
         # any poll that gets through; see mapping.rate_limit_backoff.
         self._rate_limited: int = 0
+        # Cuts the poller's wait short when a command wants fresh state; shutdown sets it
+        # too, so that wait ends with the stop event.
+        self._poll_now = threading.Event()
+        # The library's Vehicle message per VIN from the latest poll: a command needs its
+        # vehicle_id, and its power state says whether the car is asleep.
+        self._lucid_vehicles: Dict[str, Any] = {}
 
         self.connection_state: EnumAttribute[ConnectionState] = EnumAttribute(name="connection_state", parent=self, value_type=ConnectionState,
                                                                               value=ConnectionState.DISCONNECTED, tags={'connector_custom'})
@@ -97,6 +120,16 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 raise ValueError('Driving interval must be at least 15 seconds')
             if self.active_config['driving_interval'] > self.active_config['interval']:
                 raise ValueError('Driving interval must not be longer than interval')
+
+        # Commands are off unless asked for, and only a real boolean asks: the string
+        # "false" is truthy, and reading it as yes would unlock a car someone meant to
+        # keep read-only.
+        commands = config.get('commands', False)
+        if not isinstance(commands, bool):
+            raise ValueError('commands must be true or false')
+        self.active_config['commands'] = commands
+        if commands:
+            LOG.warning('Commands are enabled: this connector can lock, unlock, open and wake the car')
 
         self._session = LucidSession(Path(self.active_config['refresh_token_file']).expanduser())
 
@@ -156,7 +189,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 # fetch that takes fifteen seconds followed by a fifteen-second wait is a
                 # thirty-second cycle, and that is what the recorder downstream measured:
                 # 31 s between fixes while driving with this set to 15, 41 s at 20.
-                self._stop_event.wait(max(0.0, interval - (time.monotonic() - started)))
+                self._poll_now.wait(max(0.0, interval - (time.monotonic() - started)))
+                self._poll_now.clear()
         self._session.close()
         self.connection_state._set_value(value=ConnectionState.DISCONNECTED)  # pylint: disable=protected-access
 
@@ -171,6 +205,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 self.car_connectivity.garage.remove_vehicle(vehicle.id)
                 vehicle.enabled = False
         self._stop_event.set()
+        self._poll_now.set()
         if self._background_thread is not None:
             self._background_thread.join()
         BaseConnector.shutdown(self)
@@ -195,6 +230,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         watched became a trip. Doing it here means a new caller cannot forget."""
         garage: Garage = self.car_connectivity.garage
         seen: set[str] = set()
+        lucid_vehicles: Dict[str, Any] = {}
         for lucid_vehicle in self._session.fetch_vehicles():
             vin: Optional[str] = _dig(lucid_vehicle, "config", "vin")
             if not vin:
@@ -203,6 +239,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 LOG.warning('Vehicle %s is hidden in config', vin)
                 continue
             seen.add(vin)
+            lucid_vehicles[vin] = lucid_vehicle
             vehicle: Optional[GenericVehicle] = garage.get_vehicle(vin)
             if vehicle is None:
                 vehicle = LucidElectricVehicle(vin=vin, garage=garage, managing_connector=self, initialization=garage.get_initialization(vin))
@@ -210,7 +247,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             elif not isinstance(vehicle, LucidElectricVehicle):
                 vehicle = LucidElectricVehicle(garage=garage, origin=vehicle)
                 garage.replace_vehicle(vin, vehicle)
+            if self.active_config['commands']:
+                self._add_commands(vehicle)
             self._apply(vehicle, lucid_vehicle)
+        self._lucid_vehicles = lucid_vehicles
         for vin in set(garage.list_vehicle_vins()) - seen:
             gone = garage.get_vehicle(vin)
             if gone is not None and gone.is_managed_by_connector(self):
@@ -219,6 +259,166 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # update rather than each attribute: notify() has been accumulating their flags
         # since the last transaction_end, and nothing else calls it.
         self.car_connectivity.transaction_end()
+
+    # -- commands --------------------------------------------------------------
+    def _add_commands(self, vehicle: GenericVehicle) -> None:
+        """Give the vehicle its commands and a settable charge limit; safe to call every poll.
+        Only called when the config enables commands."""
+        if not isinstance(vehicle, LucidElectricVehicle):
+            return
+        wanted = (
+            (vehicle.charging.commands, ChargingStartStopCommand, 'start-stop', self._on_charging_start_stop),
+            (vehicle.climatization.commands, ClimatizationStartStopCommand, 'start-stop', self._on_climatization_start_stop),
+            (vehicle.window_heatings.commands, WindowHeatingStartStopCommand, 'start-stop', self._on_defrost),
+            (vehicle.doors.commands, LockUnlockCommand, 'lock-unlock', self._on_lock_unlock),
+            (vehicle.doors.commands, lambda parent: OpenCloseCommand(name='trunk', parent=parent), 'trunk', self._on_trunk),
+            (vehicle.doors.commands, lambda parent: OpenCloseCommand(name='frunk', parent=parent), 'frunk', self._on_frunk),
+            (vehicle.commands, HonkAndFlashCommand, 'honk-flash', self._on_honk_flash),
+            (vehicle.commands, WakeSleepCommand, 'wake-sleep', self._on_wake_sleep),
+        )
+        for commands, make, name, hook in wanted:
+            if not commands.contains_command(name):
+                command = make(parent=commands)
+                command._add_on_set_hook(hook)
+                command.enabled = True
+                commands.add_command(command)
+        target = vehicle.charging.settings.target_level
+        if not target._is_changeable:
+            target.minimum, target.maximum, target.precision = float(CHARGE_LIMIT_MIN), float(CHARGE_LIMIT_MAX), 1.0
+            target._add_on_set_hook(self._on_target_level)
+            target._is_changeable = True
+
+    @staticmethod
+    def _vehicle_of(obj: Any) -> LucidElectricVehicle:
+        """Walk up from a command or attribute to the vehicle that owns it."""
+        node = obj
+        while node is not None and not isinstance(node, GenericVehicle):
+            node = getattr(node, 'parent', None)
+        if not isinstance(node, LucidElectricVehicle) or not node.vin.value:
+            raise CommandError('Object hierarchy is not as expected')
+        return node
+
+    def _send(self, vehicle: LucidElectricVehicle, what: str, action: Callable[[Any, Any], Awaitable[None]], wake: bool = True,
+              error: type = CommandError) -> None:
+        """Run one command on the shared session, once, then ask for a refresh. Only the
+        last four of the VIN are logged; no token or position ever is."""
+        if not self.active_config['commands']:
+            # Nothing should reach here with commands off, since no command object exists;
+            # this is the second lock on the same door.
+            raise error('Commands are disabled in the Lucid connector config')
+        vin: str = vehicle.vin.value
+        lucid_vehicle = self._lucid_vehicles.get(vin)
+        if lucid_vehicle is None:
+            raise error('Vehicle has not been fetched from Lucid yet')
+        LOG.info('Command %s for vehicle ...%s', what, vin[-4:])
+        try:
+            self._session.command(lucid_vehicle, action, wake=wake)
+        except (RetrievalError, AuthenticationError, RuntimeError) as err:
+            LOG.error('Command %s for vehicle ...%s failed: %s', what, vin[-4:], err)
+            raise error(f'{what} failed: {err}') from err
+        LOG.info('Command %s for vehicle ...%s accepted', what, vin[-4:])
+        timer = threading.Timer(REFRESH_AFTER_COMMAND_S, self._poll_now.set)
+        timer.daemon = True
+        timer.start()
+
+    @staticmethod
+    def _command_name(command_arguments: Union[str, Dict[str, Any]], enum: type) -> Any:
+        if not isinstance(command_arguments, dict) or not isinstance(command_arguments.get('command'), enum):
+            raise CommandError(f'Command arguments are not as expected: {command_arguments}')
+        return command_arguments['command']
+
+    def _on_charging_start_stop(self, command: ChargingStartStopCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, ChargingStartStopCommand.Command) == ChargingStartStopCommand.Command.START:
+            self._send(vehicle, 'start charging', lambda api, v: api.start_charging(v))
+        else:
+            self._send(vehicle, 'stop charging', lambda api, v: api.stop_charging(v))
+        return command_arguments
+
+    def _on_climatization_start_stop(self, command: ClimatizationStartStopCommand, command_arguments: Union[str, Dict[str, Any]]) \
+            -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, ClimatizationStartStopCommand.Command) == ClimatizationStartStopCommand.Command.STOP:
+            self._send(vehicle, 'stop climatization', lambda api, v: api.set_cabin_temperature(v, None))
+            return command_arguments
+        temperature = command_arguments.get('target_temperature')
+        unit = command_arguments.get('target_temperature_unit', Temperature.C)
+        if temperature is None:
+            temperature, unit = vehicle.climatization.settings.target_temperature.value, Temperature.C
+        if temperature is None:
+            raise CommandError('Starting climatization needs a target_temperature; the car has not reported one')
+        try:
+            celsius = {Temperature.C: lambda t: t, Temperature.F: lambda t: (t - 32.0) * 5.0 / 9.0,
+                       Temperature.K: lambda t: t - 273.15}[unit](float(temperature))
+        except (KeyError, TypeError, ValueError) as err:
+            raise CommandError(f'Unusable target temperature {temperature} {unit}') from err
+        if not CABIN_TEMP_MIN_C <= celsius <= CABIN_TEMP_MAX_C:
+            raise CommandError(f'Target temperature {celsius:.1f} C is outside {CABIN_TEMP_MIN_C:.0f}-{CABIN_TEMP_MAX_C:.0f} C')
+        self._send(vehicle, 'start climatization', lambda api, v: api.set_cabin_temperature(v, round(celsius, 1)))
+        return command_arguments
+
+    def _on_defrost(self, command: WindowHeatingStartStopCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, WindowHeatingStartStopCommand.Command) == WindowHeatingStartStopCommand.Command.START:
+            self._send(vehicle, 'start defrost', lambda api, v: api.defrost_on(v))
+        else:
+            self._send(vehicle, 'stop defrost', lambda api, v: api.defrost_off(v))
+        return command_arguments
+
+    def _on_lock_unlock(self, command: LockUnlockCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, LockUnlockCommand.Command) == LockUnlockCommand.Command.LOCK:
+            self._send(vehicle, 'lock doors', lambda api, v: api.doors_lock(v))
+        else:
+            self._send(vehicle, 'unlock doors', lambda api, v: api.doors_unlock(v))
+        return command_arguments
+
+    def _on_trunk(self, command: OpenCloseCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, OpenCloseCommand.Command) == OpenCloseCommand.Command.OPEN:
+            self._send(vehicle, 'open trunk', lambda api, v: api.trunk_open(v))
+        else:
+            self._send(vehicle, 'close trunk', lambda api, v: api.trunk_close(v))
+        return command_arguments
+
+    def _on_frunk(self, command: OpenCloseCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, OpenCloseCommand.Command) == OpenCloseCommand.Command.OPEN:
+            self._send(vehicle, 'open frunk', lambda api, v: api.frunk_open(v))
+        else:
+            self._send(vehicle, 'close frunk', lambda api, v: api.frunk_close(v))
+        return command_arguments
+
+    def _on_honk_flash(self, command: HonkAndFlashCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+
+        async def honk_and_flash(api: Any, v: Any) -> None:
+            await api.honk_horn(v)
+            await api.lights_flash(v)
+        if self._command_name(command_arguments, HonkAndFlashCommand.Command) == HonkAndFlashCommand.Command.FLASH:
+            self._send(vehicle, 'flash lights', lambda api, v: api.lights_flash(v))
+        else:
+            self._send(vehicle, 'honk and flash', honk_and_flash)
+        return command_arguments
+
+    def _on_wake_sleep(self, command: WakeSleepCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if self._command_name(command_arguments, WakeSleepCommand.Command) != WakeSleepCommand.Command.WAKE:
+            raise CommandError('A Lucid cannot be put to sleep remotely; it sleeps on its own')
+        # The wake is the command, so the usual pre-wake would only do it twice.
+        self._send(vehicle, 'wake', lambda api, v: api.wakeup_vehicle(v), wake=False)
+        return command_arguments
+
+    def _on_target_level(self, attribute: GenericAttribute, value: Any) -> Any:
+        try:
+            vehicle = self._vehicle_of(attribute)
+        except CommandError as err:
+            raise SetterError(str(err)) from err
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not CHARGE_LIMIT_MIN <= value <= CHARGE_LIMIT_MAX \
+                or float(value) != int(value):
+            raise SetterError(f'Charge limit must be a whole percent from {CHARGE_LIMIT_MIN} to {CHARGE_LIMIT_MAX}, not {value!r}')
+        self._send(vehicle, f'set charge limit to {int(value)}%', lambda api, v: api.set_charge_limit(v, int(value)), error=SetterError)
+        return value
 
     # -- mapping ---------------------------------------------------------------
     def _apply(self, vehicle: LucidVehicle, lv: Any) -> None:

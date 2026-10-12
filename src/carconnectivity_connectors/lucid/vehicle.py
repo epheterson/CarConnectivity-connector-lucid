@@ -4,12 +4,17 @@ pattern CarConnectivity uses and for parity with other connectors."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+from enum import Enum
+
 from carconnectivity.attributes import BooleanAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
+from carconnectivity.commands import GenericCommand
+from carconnectivity.errors import SetterError
 from carconnectivity.units import Speed, Temperature
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
 
 if TYPE_CHECKING:
-    from typing import Optional, Dict
+    from typing import Optional, Dict, Union
+    from carconnectivity.objects import GenericObject
     from carconnectivity.garage import Garage
     from carconnectivity_connectors.base.connector import BaseConnector
 
@@ -70,3 +75,38 @@ class LucidElectricVehicle(ElectricVehicle, LucidVehicle):
             super().__init__(garage=garage, origin=origin, initialization=initialization)
         else:
             super().__init__(vin=vin, garage=garage, managing_connector=managing_connector, initialization=initialization)
+
+
+class OpenCloseCommand(GenericCommand):
+    """Open or close one closure, the trunk or the frunk. CarConnectivity has no standard
+    command for these, so this one is the connector's own. Takes "open" / "close", the
+    enum, or {"command": "open"}, like the standard commands do."""
+    def __init__(self, name: str, parent: Optional[GenericObject] = None, initialization: Optional[Dict] = None) -> None:
+        super().__init__(name=name, parent=parent, initialization=initialization)
+
+    @property
+    def value(self) -> Optional[Union[str, Dict]]:
+        return super().value
+
+    @value.setter
+    def value(self, new_value: Optional[Union[str, Dict]]) -> None:
+        new_value = self._execute_on_set_hook(new_value, early_hook=True)
+        raw = new_value.get('command') if isinstance(new_value, dict) else new_value
+        if isinstance(raw, str):
+            raw = raw.strip()
+        try:
+            command = OpenCloseCommand.Command(raw)
+        except ValueError as err:
+            raise SetterError(f'Invalid value for {self.name}: {raw!r}; use one of {[str(c) for c in OpenCloseCommand.Command]}') from err
+        if not self._is_changeable:
+            raise TypeError('You cannot use this command. Command is not implemented.')
+        new_value = self._execute_on_set_hook({'command': command}, early_hook=False)
+        self._set_value(new_value)
+
+    class Command(Enum):
+        """Open or close."""
+        OPEN = 'open'
+        CLOSE = 'close'
+
+        def __str__(self) -> str:
+            return self.value
