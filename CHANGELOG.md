@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-12)
 
 ### Added
 - **Commands, off by default.** Set `"commands": true` in the connector config (a JSON boolean; anything else is refused at startup) and each vehicle gets CarConnectivity's standard commands: charging start-stop, a settable charge limit (50 to 100 %), climatization start-stop with a target temperature, defrost as window heating, lock-unlock, honk-flash and wake. Trunk and frunk get an open/close command of the connector's own, since the shared model has none. Without the option no command object exists and the charge limit stays read-only, so the default is exactly 0.1.8's read-only connector.
