@@ -70,7 +70,6 @@ Off by default. Without the option the connector creates no command objects at a
 | Silence a Sentry alarm | `commands/sentry-alarm` | `off` (an alarm cannot be set off remotely) | `turn_off_sentry_alarm` |
 | Security alarm | `commands/alarm` | `on`, `off`, `silent` (notifications only) | `alarm_control` |
 | Windows, all four | `commands/windows` | `vent` (drops them a little; again drops them further), `close` | `open_all_windows` / `close_all_windows` |
-| Charge port door | `doors/commands/charge-port` | `open`, `close` | `charge_port_open` / `charge_port_close` |
 | Headlights | `commands/lights` | `on`, `off` | `lights_on` / `lights_off` |
 | Max A/C | `climatization/commands/max-ac` | `on`, `off` | `max_ac_on` / `max_ac_off` |
 | Creature comfort | `climatization/commands/creature-comfort` | `on`, `off` | `creature_comfort_control` |
@@ -87,7 +86,6 @@ Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "
 | Enhanced deterrence on | `enhanced_deterrence` | `sentry_state.enhanced_deterrence_state` (enabled or idle) |
 | Alarm mode | `alarm` | `alarm.mode` |
 | Windows | `windows/...` | `body.window_position` |
-| Charge port door | `charge_port` | `body.charge_port` (not one of `doors`: it stands open for every charge) |
 | Headlights | `lights/light_state` | `chassis.headlights` |
 | Max A/C, creature comfort | `max_ac`, `creature_comfort` | `hvac.max_ac_status`, `hvac.keep_climate_status` (pet mode) |
 | Seat levels | `seat_heat_driver`, `seat_vent_driver`, `seat_heat_front_passenger`, `seat_vent_front_passenger`, `seat_heat_rear_left`, `seat_heat_rear_center`, `seat_heat_rear_right` | `hvac.seats` (a seat's warmest zone) |
@@ -97,7 +95,7 @@ Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "
 
 Sentry at home and at work have no state in the API that the connector can read, so they are commands only.
 
-Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (the library offers vent and close only), and the sentry event and video history, which is a read API, not a command.
+Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (the library offers vent and close only), the sentry event and video history, which is a read API, not a command, and the charge port door: on an Air it opens by hand, and the car reports it open while it is shut.
 
 How they behave:
 

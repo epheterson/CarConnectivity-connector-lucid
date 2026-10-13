@@ -184,18 +184,17 @@ def test_halo_secure_state_is_published(vehicle):
     assert vehicle.enhanced_deterrence.value is False and vehicle.alarm.value is None
 
 
-def test_charge_port_door_and_headlights_are_published(vehicle):
-    from carconnectivity.doors import Doors
+def test_headlights_are_published_and_the_charge_port_door_is_not(vehicle):
     from carconnectivity.lights import Lights
 
     st = SimpleNamespace(body=SimpleNamespace(charge_port=1), chassis=SimpleNamespace(headlights=2))
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
-    assert vehicle.charge_port.value is Doors.OpenState.OPEN
     assert vehicle.lights.light_state.value is Lights.LightState.ON
-    assert vehicle.doors.open_state.value is not Doors.OpenState.OPEN, "a charge port door is not a door: charging is not 'doors open'"
-    st.body.charge_port, st.chassis.headlights = 2, 3
+    # an Air with a manual door reports it open while it is shut: nothing to publish
+    assert not hasattr(vehicle, "charge_port")
+    st.chassis.headlights = 3
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
-    assert vehicle.charge_port.value is Doors.OpenState.CLOSED and vehicle.lights.light_state.value is Lights.LightState.OFF
+    assert vehicle.lights.light_state.value is Lights.LightState.OFF
 
 
 def test_climate_toggles_and_heater_levels_are_published(vehicle):

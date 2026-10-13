@@ -145,8 +145,6 @@ LIBRARY_CALLS = {
     "alarm_control": ("mode",),
     "open_all_windows": (),
     "close_all_windows": (),
-    "charge_port_open": (),
-    "charge_port_close": (),
     "lights_on": (),
     "lights_off": (),
     "max_ac_on": (),
@@ -557,19 +555,17 @@ def test_a_failed_new_command_is_sent_once_and_named(rig):
     assert rig.api.names() == ["sentry_mode_off"]
 
 
-# -- 0.3.0: windows, charge port, headlights ---------------------------------------
+# -- 0.3.0: windows, headlights ---------------------------------------
 @pytest.mark.parametrize(
     "path,value,method",
     [
         (("commands", "windows"), "vent", "open_all_windows"),
         (("commands", "windows"), "close", "close_all_windows"),
-        (("doors", "charge-port"), "open", "charge_port_open"),
-        (("doors", "charge-port"), "close", "charge_port_close"),
         (("commands", "lights"), "on", "lights_on"),
         (("commands", "lights"), "off", "lights_off"),
     ],
 )
-def test_windows_charge_port_and_headlights(rig, path, value, method):
+def test_windows_and_headlights(rig, path, value, method):
     owner = rig.vehicle if path[0] == "commands" else getattr(rig.vehicle, path[0])
     owner.commands.commands[path[1]].value = value
     assert rig.api.calls == [(method, ("vid-1",))]
@@ -651,3 +647,8 @@ def test_ac_current_limit_rejects_bad_values(rig, bad):
     with pytest.raises((SetterError, ValueError, TypeError)):
         rig.vehicle.charging.settings.maximum_current.value = bad
     assert rig.api.calls == []
+
+
+def test_no_charge_port_command(rig):
+    """An Air's charge port door is opened by hand; the API's call for a powered one is not offered."""
+    assert "charge-port" not in rig.vehicle.doors.commands.commands

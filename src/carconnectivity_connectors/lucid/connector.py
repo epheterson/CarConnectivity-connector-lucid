@@ -11,7 +11,7 @@ nothing in vampire drain.
 Read-only unless the config says `"commands": true`. Then, and only then, each
 vehicle gets CarConnectivity commands (charging, charge limit, climatization,
 defrost, locks, trunk and frunk, lights and horn, wake; from 0.3.0 Sentry and the
-alarm, windows, charge port, headlights, seat and steering wheel heat, Max A/C,
+alarm, windows, headlights, seat and steering wheel heat, Max A/C,
 creature comfort, battery preconditioning, AC current limit) as set-hooks that run on
 the caller's thread through the poller's own session. They are the only thing
 that ever wakes the car, and they do it explicitly (LucidSession.command).
@@ -301,13 +301,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.commands, AlarmCommand, 'alarm', self._choice_hook({
                 choice: (f'set the alarm {choice}', lambda api, v, mode=mode: api.alarm_control(v, mode))
                 for choice, mode in ((AlarmCommand.Command.OFF, 1), (AlarmCommand.Command.ON, 2), (AlarmCommand.Command.SILENT, 3))})),
-            # Windows, charge port, headlights.
+            # Windows, headlights.
             (vehicle.commands, WindowsCommand, 'windows', self._choice_hook({
                 WindowsCommand.Command.VENT: ('vent windows', lambda api, v: api.open_all_windows(v)),
                 WindowsCommand.Command.CLOSE: ('close windows', lambda api, v: api.close_all_windows(v))})),
-            (vehicle.doors.commands, OpenCloseCommand, 'charge-port', self._choice_hook({
-                OpenCloseCommand.Command.OPEN: ('open charge port', lambda api, v: api.charge_port_open(v)),
-                OpenCloseCommand.Command.CLOSE: ('close charge port', lambda api, v: api.charge_port_close(v))})),
             (vehicle.commands, OnOffCommand, 'lights', self._choice_hook({
                 OnOffCommand.Command.ON: ('turn on headlights', lambda api, v: api.lights_on(v)),
                 OnOffCommand.Command.OFF: ('turn off headlights', lambda api, v: api.lights_off(v))})),
@@ -724,7 +721,6 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # EnhancedDeterrenceState shares SentryEnablementState's numbers: 1 enabled, 2 disabled, 3 idle.
         sv.enhanced_deterrence._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enhanced_deterrence_state")), measured=measured)
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
-        sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
         sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
                                               measured=measured)
