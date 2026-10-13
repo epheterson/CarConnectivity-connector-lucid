@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from enum import Enum
 
-from carconnectivity.attributes import BooleanAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
+from carconnectivity.attributes import BooleanAttribute, EnumAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
 from carconnectivity.commands import GenericCommand
 from carconnectivity.errors import SetterError
 from carconnectivity.units import Speed, Temperature
@@ -65,6 +65,12 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.battery_energy_kwh: FloatAttribute = FloatAttribute(name="battery_energy_kwh", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
         self.battery_health_warning: BooleanAttribute = BooleanAttribute(name="battery_health_warning", parent=self, tags={'connector_custom'})
         self.software_update_available: BooleanAttribute = BooleanAttribute(name="software_update_available", parent=self, tags={'connector_custom'})
+        # The state behind the 0.3.0 commands, so a UI can show each one as a toggle.
+        # Enhanced deterrence reads like `sentry`: enabled or idle is on. The alarm mode
+        # is in the words the alarm command takes.
+        self.enhanced_deterrence: BooleanAttribute = BooleanAttribute(name="enhanced_deterrence", parent=self, tags={'connector_custom'})
+        self.alarm: EnumAttribute[AlarmCommand.Command] = EnumAttribute(name="alarm", parent=self, value_type=AlarmCommand.Command,
+                                                                        tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):

@@ -42,11 +42,11 @@ from carconnectivity.vehicle import GenericVehicle
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession, translate_api_error
-from carconnectivity_connectors.lucid.vehicle import LucidElectricVehicle, LucidVehicle, OpenCloseCommand
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, OpenCloseCommand
 from carconnectivity_connectors.lucid._version import __version__
 
 if TYPE_CHECKING:
-    from typing import Any, Awaitable, Callable, Dict, Optional, Union
+    from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
     from carconnectivity.carconnectivity import CarConnectivity
 
 LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.lucid")
@@ -271,14 +271,33 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.climatization.commands, ClimatizationStartStopCommand, 'start-stop', self._on_climatization_start_stop),
             (vehicle.window_heatings.commands, WindowHeatingStartStopCommand, 'start-stop', self._on_defrost),
             (vehicle.doors.commands, LockUnlockCommand, 'lock-unlock', self._on_lock_unlock),
-            (vehicle.doors.commands, lambda parent: OpenCloseCommand(name='trunk', parent=parent), 'trunk', self._on_trunk),
-            (vehicle.doors.commands, lambda parent: OpenCloseCommand(name='frunk', parent=parent), 'frunk', self._on_frunk),
+            (vehicle.doors.commands, OpenCloseCommand, 'trunk', self._on_trunk),
+            (vehicle.doors.commands, OpenCloseCommand, 'frunk', self._on_frunk),
             (vehicle.commands, HonkAndFlashCommand, 'honk-flash', self._on_honk_flash),
             (vehicle.commands, WakeSleepCommand, 'wake-sleep', self._on_wake_sleep),
+            # 0.3.0: Halo Secure.
+            (vehicle.commands, OnOffCommand, 'sentry', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on sentry', lambda api, v: api.sentry_mode_on(v)),
+                OnOffCommand.Command.OFF: ('turn off sentry', lambda api, v: api.sentry_mode_off(v))})),
+            (vehicle.commands, OnOffCommand, 'enhanced-deterrence', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on enhanced deterrence', lambda api, v: api.enhanced_deterrence_on(v)),
+                OnOffCommand.Command.OFF: ('turn off enhanced deterrence', lambda api, v: api.enhanced_deterrence_off(v))})),
+            (vehicle.commands, OnOffCommand, 'sentry-at-home', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on sentry at home', lambda api, v: api.sentry_mode_at_home_on(v)),
+                OnOffCommand.Command.OFF: ('turn off sentry at home', lambda api, v: api.sentry_mode_at_home_off(v))})),
+            (vehicle.commands, OnOffCommand, 'sentry-at-work', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on sentry at work', lambda api, v: api.sentry_mode_at_work_on(v)),
+                OnOffCommand.Command.OFF: ('turn off sentry at work', lambda api, v: api.sentry_mode_at_work_off(v))})),
+            # An alarm cannot be set off remotely, only silenced.
+            (vehicle.commands, OnOffCommand, 'sentry-alarm', self._choice_hook({
+                OnOffCommand.Command.OFF: ('silence the sentry alarm', lambda api, v: api.turn_off_sentry_alarm(v))})),
+            (vehicle.commands, AlarmCommand, 'alarm', self._choice_hook({
+                choice: (f'set the alarm {choice}', lambda api, v, mode=mode: api.alarm_control(v, mode))
+                for choice, mode in ((AlarmCommand.Command.OFF, 1), (AlarmCommand.Command.ON, 2), (AlarmCommand.Command.SILENT, 3))})),
         )
-        for commands, make, name, hook in wanted:
+        for commands, kind, name, hook in wanted:
             if not commands.contains_command(name):
-                command = make(parent=commands)
+                command = kind(name=name, parent=commands)
                 command._add_on_set_hook(hook)
                 command.enabled = True
                 commands.add_command(command)
@@ -327,6 +346,23 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if not isinstance(command_arguments, dict) or not isinstance(command_arguments.get('command'), enum):
             raise CommandError(f'Command arguments are not as expected: {command_arguments}')
         return command_arguments['command']
+
+    def _choice_hook(self, actions: Dict[Any, Tuple[str, Callable[[Any, Any], Awaitable[None]]]]) \
+            -> Callable[[Any, Union[str, Dict[str, Any]]], Union[str, Dict[str, Any]]]:
+        """A set-hook for one of the connector's own choice commands: each choice it takes
+        is a (what, action) pair sent like any other command; a choice not in the table,
+        the "on" of an alarm that can only be silenced, is refused before anything is sent."""
+        enum = type(next(iter(actions)))
+
+        def hook(command: Any, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+            vehicle = self._vehicle_of(command)
+            choice = self._command_name(command_arguments, enum)
+            if choice not in actions:
+                raise CommandError(f'{command.name} takes only {", ".join(str(c) for c in actions)}')
+            what, action = actions[choice]
+            self._send(vehicle, what, action)
+            return command_arguments
+        return hook
 
     def _on_charging_start_stop(self, command: ChargingStartStopCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
         vehicle = self._vehicle_of(command)
@@ -444,6 +480,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._apply_cabin(vehicle, st, measured)
         self._apply_tires(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
+        self._apply_controls(vehicle, st, measured)
 
     @staticmethod
     def _apply_identity(sv: LucidVehicle, cfg: Any, st: Any, measured: datetime) -> None:
@@ -615,6 +652,13 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         target = _f(_dig(st, "hvac", "front_left_set_temperature"))
         if target is not None:
             sv.climatization.settings.target_temperature._set_value(target, measured=measured, unit=Temperature.C)
+
+    @staticmethod
+    def _apply_controls(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """The state behind the 0.3.0 commands, each where a UI would look for its toggle."""
+        # EnhancedDeterrenceState shares SentryEnablementState's numbers: 1 enabled, 2 disabled, 3 idle.
+        sv.enhanced_deterrence._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enhanced_deterrence_state")), measured=measured)
+        sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
 
     # -- identity --------------------------------------------------------------
     def get_version(self) -> str:

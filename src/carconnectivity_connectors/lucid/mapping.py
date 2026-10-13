@@ -15,6 +15,8 @@ from carconnectivity.windows import Windows
 from carconnectivity.position import Position
 from carconnectivity.vehicle import GenericVehicle
 
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand
+
 # --- Lucid enum ints (proto/vehicle_state_service.proto) --------------------
 
 # PowerState. 12 and 13 are undefined upstream (python-lucidmotors #23); on a
@@ -221,6 +223,15 @@ def sentry_armed(enablement: Optional[int]) -> Optional[bool]:
     if enablement is None or enablement == 0:
         return None
     return enablement in (SENTRY_ENABLED, SENTRY_IDLE)
+
+
+# AlarmMode: 0 UNKNOWN, 1 OFF, 2 ON, 3 SILENT (the app's "push notifications only").
+_ALARM_MODES = {1: AlarmCommand.Command.OFF, 2: AlarmCommand.Command.ON, 3: AlarmCommand.Command.SILENT}
+
+
+def alarm_mode(mode: Optional[int]) -> Optional[AlarmCommand.Command]:
+    """The security alarm's mode in the words the alarm command takes; None when unknown."""
+    return _ALARM_MODES.get(mode) if mode is not None else None
 
 
 # ChassisState carries four pressures in bar and, per wheel, a hard and a soft warning

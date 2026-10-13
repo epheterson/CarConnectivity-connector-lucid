@@ -203,3 +203,10 @@ def test_one_moving_car_sets_the_pace_for_the_account():
 
     # One request returns every vehicle, so the fastest car decides.
     assert m.poll_interval([GenericVehicle.State.PARKED, GenericVehicle.State.DRIVING], 60, 15) == 15
+
+
+# ---- 0.3.0: the state behind the new commands -----------------------------------
+@pytest.mark.parametrize("mode,want", [(1, "off"), (2, "on"), (3, "silent"), (0, None), (None, None), (9, None)])
+def test_alarm_mode(mode, want):
+    got = m.alarm_mode(mode)
+    assert (None if got is None else str(got)) == want

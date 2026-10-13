@@ -119,6 +119,31 @@ class FakeAPI:
     def names(self):
         return [name for name, _ in self.calls]
 
+    def __getattr__(self, name):
+        # The 0.3.0 commands, recorded the same way. Only names the real library has: a
+        # test against a call that does not exist would pass here and fail on the car,
+        # so test_every_faked_call_is_one_the_library_has checks this list against it.
+        if name not in LIBRARY_CALLS:
+            raise AttributeError(name)
+
+        async def call(v, *args, **kwargs):
+            await self._record(name, v.vehicle_id, *args, *([kwargs] if kwargs else []))
+        return call
+
+
+LIBRARY_CALLS = {
+    "sentry_mode_on": (),
+    "sentry_mode_off": (),
+    "enhanced_deterrence_on": (),
+    "enhanced_deterrence_off": (),
+    "sentry_mode_at_home_on": (),
+    "sentry_mode_at_home_off": (),
+    "sentry_mode_at_work_on": (),
+    "sentry_mode_at_work_off": (),
+    "turn_off_sentry_alarm": (),
+    "alarm_control": ("mode",),
+}
+
 
 @pytest.fixture(autouse=True)
 def _no_ntp(monkeypatch):
@@ -456,3 +481,58 @@ def test_commands_from_other_threads_never_overlap_the_poller(rig):
     assert rig.api.max_in_flight == 1
     assert rig.api.names().count("login") == 0, "no second login"
     assert rig.api.names().count("doors_lock") == 4
+
+
+def test_every_faked_call_is_one_the_library_has():
+    """The fake answers to these names; the real LucidAPI must too, with the same arguments."""
+    import inspect  # pylint: disable=import-outside-toplevel
+
+    lucidmotors = pytest.importorskip("lucidmotors")
+    for name, params in LIBRARY_CALLS.items():
+        method = getattr(lucidmotors.LucidAPI, name)
+        assert tuple(inspect.signature(method).parameters)[1:] == ("vehicle", *params), name
+
+
+# -- 0.3.0: Halo Secure ----------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,value,method",
+    [
+        ("sentry", "on", "sentry_mode_on"),
+        ("sentry", "off", "sentry_mode_off"),
+        ("enhanced-deterrence", "on", "enhanced_deterrence_on"),
+        ("enhanced-deterrence", "off", "enhanced_deterrence_off"),
+        ("sentry-at-home", "on", "sentry_mode_at_home_on"),
+        ("sentry-at-home", "off", "sentry_mode_at_home_off"),
+        ("sentry-at-work", "on", "sentry_mode_at_work_on"),
+        ("sentry-at-work", "off", "sentry_mode_at_work_off"),
+        ("sentry-alarm", "off", "turn_off_sentry_alarm"),
+    ],
+)
+def test_halo_secure(rig, name, value, method):
+    rig.vehicle.commands.commands[name].value = value
+    assert rig.api.calls == [(method, ("vid-1",))]
+
+
+def test_a_sentry_alarm_can_only_be_silenced(rig):
+    with pytest.raises(CommandError, match="off"):
+        rig.vehicle.commands.commands["sentry-alarm"].value = "on"
+    assert rig.api.calls == []
+
+
+@pytest.mark.parametrize("value,mode", [("off", 1), ("on", 2), ("silent", 3)])
+def test_alarm_mode(rig, value, mode):
+    rig.vehicle.commands.commands["alarm"].value = value
+    assert rig.api.calls == [("alarm_control", ("vid-1", mode))]
+
+
+def test_the_new_commands_wake_a_sleeping_car_first(rig):
+    _poll_sees(rig, 1)
+    rig.vehicle.commands.commands["sentry"].value = "off"
+    assert rig.api.names() == ["wakeup_vehicle", "sentry_mode_off"]
+
+
+def test_a_failed_new_command_is_sent_once_and_named(rig):
+    rig.api.fail_with = type("E", (Exception,), {"code": SimpleNamespace(name="UNAVAILABLE")})("down")
+    with pytest.raises(CommandError, match="^turn off sentry failed:"):
+        rig.vehicle.commands.commands["sentry"].value = "off"
+    assert rig.api.names() == ["sentry_mode_off"]

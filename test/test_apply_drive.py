@@ -172,3 +172,13 @@ def test_threat_battery_and_update_are_published(vehicle):
     assert vehicle.sentry_threat.value is True
     assert vehicle.battery_capacity_kwh.value == pytest.approx(117.15) and vehicle.battery_energy_kwh.value == pytest.approx(92.63)
     assert vehicle.battery_health_warning.value is False and vehicle.software_update_available.value is True
+
+
+def test_halo_secure_state_is_published(vehicle):
+    st = SimpleNamespace(sentry_state=SimpleNamespace(enhanced_deterrence_state=3), alarm=SimpleNamespace(mode=3))
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.enhanced_deterrence.value is True, "IDLE is on, as it is for Sentry"
+    assert str(vehicle.alarm.value) == "silent"
+    st.sentry_state.enhanced_deterrence_state, st.alarm.mode = 2, 0
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.enhanced_deterrence.value is False and vehicle.alarm.value is None
