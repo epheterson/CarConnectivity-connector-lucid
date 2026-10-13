@@ -216,3 +216,14 @@ def test_alarm_mode(mode, want):
 def test_headlights(action, want):
     got = m.headlights(action)
     assert (None if got is None else got.value) == want
+
+
+@pytest.mark.parametrize("value,want", [(2, True), (1, False), (3, False), (0, None), (None, None)])
+def test_two_state_with_unknown(value, want):
+    assert m.two_state(value, on={2}, off={1, 3}) is want
+
+
+@pytest.mark.parametrize("modes,want", [((2, 3), "low"), ((5, 0, 3), "high"), ((2, 2), "off"), ((0, None), None), ((), None)])
+def test_seat_level_is_the_warmest_zone(modes, want):
+    got = m.seat_level(modes)
+    assert (None if got is None else str(got)) == want

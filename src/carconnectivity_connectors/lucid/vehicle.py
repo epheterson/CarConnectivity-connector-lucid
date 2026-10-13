@@ -76,6 +76,16 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         # door stands open for every charge, and "doors open" would then mean "charging".
         self.charge_port: EnumAttribute[Doors.OpenState] = EnumAttribute(name="charge_port", parent=self, value_type=Doors.OpenState,
                                                                          tags={'connector_custom'})
+        self.max_ac: BooleanAttribute = BooleanAttribute(name="max_ac", parent=self, tags={'connector_custom'})
+        self.creature_comfort: BooleanAttribute = BooleanAttribute(name="creature_comfort", parent=self, tags={'connector_custom'})
+        self.steering_wheel_heater: EnumAttribute[ClimateLevel] = EnumAttribute(name="steering_wheel_heater", parent=self, value_type=ClimateLevel,
+                                                                                tags={'connector_custom'})
+        # One level per seat and mode, named as mapping.seat_attribute names them: the
+        # front seats heat and ventilate, the rear ones heat.
+        self.seat_climate: Dict[str, EnumAttribute[ClimateLevel]] = {
+            name: EnumAttribute(name=name, parent=self, value_type=ClimateLevel, tags={'connector_custom'})
+            for name in ("seat_heat_driver", "seat_vent_driver", "seat_heat_front_passenger", "seat_vent_front_passenger",
+                         "seat_heat_rear_left", "seat_heat_rear_center", "seat_heat_rear_right")}
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):

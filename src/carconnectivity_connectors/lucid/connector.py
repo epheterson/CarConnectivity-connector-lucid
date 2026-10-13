@@ -43,7 +43,7 @@ from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession, translate_api_error
 from carconnectivity_connectors.lucid.vehicle import AlarmCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, OpenCloseCommand, \
-    WindowsCommand
+    LevelCommand, SeatClimateCommand, WindowsCommand
 from carconnectivity_connectors.lucid._version import __version__
 
 if TYPE_CHECKING:
@@ -305,6 +305,18 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.commands, OnOffCommand, 'lights', self._choice_hook({
                 OnOffCommand.Command.ON: ('turn on headlights', lambda api, v: api.lights_on(v)),
                 OnOffCommand.Command.OFF: ('turn off headlights', lambda api, v: api.lights_off(v))})),
+            # Climate beyond the cabin temperature.
+            (vehicle.climatization.commands, OnOffCommand, 'max-ac', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on max a/c', lambda api, v: api.max_ac_on(v)),
+                OnOffCommand.Command.OFF: ('turn off max a/c', lambda api, v: api.max_ac_off(v))})),
+            (vehicle.climatization.commands, OnOffCommand, 'creature-comfort', self._choice_hook({
+                choice: (f'turn {choice} creature comfort', lambda api, v, mode=mode: api.creature_comfort_control(v, mode))
+                for choice, mode in ((OnOffCommand.Command.ON, mapping.CREATURE_COMFORT_MODE[True]),
+                                     (OnOffCommand.Command.OFF, mapping.CREATURE_COMFORT_MODE[False]))})),
+            (vehicle.climatization.commands, LevelCommand, 'steering-wheel-heater', self._choice_hook({
+                choice: (f'set steering wheel heater {choice}', lambda api, v, level=level: api.steering_wheel_heater_control(v, level))
+                for choice, level in mapping.STEERING_LEVEL.items()})),
+            (vehicle.climatization.commands, SeatClimateCommand, 'seat-climate', self._on_seat_climate),
         )
         for commands, kind, name, hook in wanted:
             if not commands.contains_command(name):
@@ -461,6 +473,19 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             raise CommandError('A Lucid cannot be put to sleep remotely; it sleeps on its own')
         # The wake is the command, so the usual pre-wake would only do it twice.
         self._send(vehicle, 'wake', lambda api, v: api.wakeup_vehicle(v), wake=False)
+        return command_arguments
+
+    def _on_seat_climate(self, command: SeatClimateCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if not isinstance(command_arguments, dict):
+            raise CommandError(f'Command arguments are not as expected: {command_arguments}')
+        seat, mode, level = command_arguments.get('seat'), command_arguments.get('mode'), command_arguments.get('level')
+        zones = mapping.SEAT_ZONES.get((seat, mode))
+        if zones is None or level not in mapping.SEAT_MODE:
+            raise CommandError(f'Command arguments are not as expected: {command_arguments}')
+        car_mode = mapping.SEAT_MODE[level]
+        self._send(vehicle, f'set {seat} seat {mode} {level}',
+                   lambda api, v: api.seat_climate_control(v, **{zone: car_mode for zone in zones}))
         return command_arguments
 
     def _on_target_level(self, attribute: GenericAttribute, value: Any) -> Any:
@@ -672,6 +697,14 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
         sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
+        hvac = _dig(st, "hvac")
+        sv.max_ac._set_value(mapping.two_state(_dig(hvac, "max_ac_status"), mapping.MAX_AC_ON, mapping.MAX_AC_OFF), measured=measured)
+        sv.creature_comfort._set_value(mapping.two_state(_dig(hvac, "keep_climate_status"), mapping.CREATURE_COMFORT_ON, mapping.CREATURE_COMFORT_OFF),
+                                       measured=measured)
+        sv.steering_wheel_heater._set_value(mapping.steering_wheel_level(_dig(hvac, "steering_heater_level")), measured=measured)
+        for (seat, mode), zones in mapping.SEAT_ZONES.items():
+            level = mapping.seat_level(_dig(hvac, "seats", zone) for zone in zones)
+            sv.seat_climate[mapping.seat_attribute(seat, mode)]._set_value(level, measured=measured)
 
     # -- identity --------------------------------------------------------------
     def get_version(self) -> str:

@@ -196,3 +196,19 @@ def test_charge_port_door_and_headlights_are_published(vehicle):
     st.body.charge_port, st.chassis.headlights = 2, 3
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
     assert vehicle.charge_port.value is Doors.OpenState.CLOSED and vehicle.lights.light_state.value is Lights.LightState.OFF
+
+
+def test_climate_toggles_and_heater_levels_are_published(vehicle):
+    seats = SimpleNamespace(driver_heat_backrest_zone1=3, driver_heat_backrest_zone3=5, driver_heat_cushion_zone2=0, driver_heat_cushion_zone4=4,
+                            driver_vent_backrest=2, driver_vent_cushion=2, rear_passenger_heat_left=0)
+    st = SimpleNamespace(hvac=SimpleNamespace(max_ac_status=2, keep_climate_status=4, steering_heater_level=3, seats=seats))
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.max_ac.value is True and vehicle.creature_comfort.value is True
+    assert str(vehicle.steering_wheel_heater.value) == "medium"
+    assert str(vehicle.seat_climate["seat_heat_driver"].value) == "high", "a seat's level is its warmest zone"
+    assert str(vehicle.seat_climate["seat_vent_driver"].value) == "off"
+    assert vehicle.seat_climate["seat_heat_rear_left"].value is None, "0 is the car not saying"
+    st.hvac.max_ac_status, st.hvac.keep_climate_status, st.hvac.steering_heater_level = 1, 2, 1
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.max_ac.value is False and vehicle.creature_comfort.value is False, "keep climate on is not pet mode"
+    assert str(vehicle.steering_wheel_heater.value) == "off"

@@ -15,6 +15,7 @@ from carconnectivity.carconnectivity import CarConnectivity
 from carconnectivity.errors import CommandError, SetterError
 from carconnectivity.units import Temperature
 from carconnectivity_connectors.lucid.auth.session import LucidSession
+from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.connector import Connector
 
 VIN = "LUCIDTESTVIN00042"
@@ -148,6 +149,11 @@ LIBRARY_CALLS = {
     "charge_port_close": (),
     "lights_on": (),
     "lights_off": (),
+    "max_ac_on": (),
+    "max_ac_off": (),
+    "creature_comfort_control": ("mode",),
+    "steering_wheel_heater_control": ("level",),
+    "seat_climate_control": ("kwargs",),
 }
 
 
@@ -497,6 +503,10 @@ def test_every_faked_call_is_one_the_library_has():
     for name, params in LIBRARY_CALLS.items():
         method = getattr(lucidmotors.LucidAPI, name)
         assert tuple(inspect.signature(method).parameters)[1:] == ("vehicle", *params), name
+    # seat_climate_control takes its zones as keyword arguments; each one sent must be a field of the request.
+    fields = set(lucidmotors.gen.vehicle_state_service_pb2.SeatClimateControlRequest.DESCRIPTOR.fields_by_name)
+    sent = {zone for zones in mapping.SEAT_ZONES.values() for zone in zones}
+    assert sent and sent <= fields
 
 
 # -- 0.3.0: Halo Secure ----------------------------------------------------------
@@ -565,4 +575,46 @@ def test_windows_charge_port_and_headlights(rig, path, value, method):
 def test_windows_do_not_claim_a_full_open(rig):
     with pytest.raises(SetterError):
         rig.vehicle.commands.commands["windows"].value = "open"
+    assert rig.api.calls == []
+
+
+# -- 0.3.0: climate ------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,value,call",
+    [
+        ("max-ac", "on", ("max_ac_on", ("vid-1",))),
+        ("max-ac", "off", ("max_ac_off", ("vid-1",))),
+        ("creature-comfort", "on", ("creature_comfort_control", ("vid-1", 2))),
+        ("creature-comfort", "off", ("creature_comfort_control", ("vid-1", 1))),
+        ("steering-wheel-heater", "off", ("steering_wheel_heater_control", ("vid-1", 1))),
+        ("steering-wheel-heater", "low", ("steering_wheel_heater_control", ("vid-1", 2))),
+        ("steering-wheel-heater", "high", ("steering_wheel_heater_control", ("vid-1", 4))),
+    ],
+)
+def test_max_ac_creature_comfort_and_steering_wheel(rig, name, value, call):
+    rig.vehicle.climatization.commands.commands[name].value = value
+    assert rig.api.calls == [call]
+
+
+@pytest.mark.parametrize(
+    "value,zones",
+    [
+        (
+            "driver heat high",
+            {"driver_heat_backrest_zone1": 5, "driver_heat_backrest_zone3": 5, "driver_heat_cushion_zone2": 5, "driver_heat_cushion_zone4": 5},
+        ),
+        ("front-passenger vent low", {"front_passenger_vent_backrest": 3, "front_passenger_vent_cushion": 3}),
+        ({"seat": "rear-center", "mode": "heat", "level": "off"}, {"rear_passenger_heat_center": 2}),
+        ("rear-right heat medium", {"rear_passenger_heat_right": 4}),
+    ],
+)
+def test_seat_climate_sets_every_zone_of_one_seat(rig, value, zones):
+    rig.vehicle.climatization.commands.commands["seat-climate"].value = value
+    assert rig.api.calls == [("seat_climate_control", ("vid-1", zones))]
+
+
+@pytest.mark.parametrize("name,value", [("seat-climate", "rear-left vent high"), ("seat-climate", "driver heat 9"), ("steering-wheel-heater", "4")])
+def test_climate_levels_out_of_range_never_reach_the_car(rig, name, value):
+    with pytest.raises(SetterError):
+        rig.vehicle.climatization.commands.commands[name].value = value
     assert rig.api.calls == []

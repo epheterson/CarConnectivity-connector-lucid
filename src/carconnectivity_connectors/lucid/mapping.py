@@ -16,7 +16,7 @@ from carconnectivity.windows import Windows
 from carconnectivity.position import Position
 from carconnectivity.vehicle import GenericVehicle
 
-from carconnectivity_connectors.lucid.vehicle import AlarmCommand
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, ClimateLevel, SeatClimateCommand
 
 # --- Lucid enum ints (proto/vehicle_state_service.proto) --------------------
 
@@ -245,6 +245,68 @@ def headlights(action: Optional[int]) -> Optional[Lights.LightState]:
     if action is None or action == 0:
         return None
     return {LIGHT_ON: Lights.LightState.ON, LIGHT_OFF: Lights.LightState.OFF}.get(action, Lights.LightState.UNKNOWN)
+
+
+def two_state(value: Optional[int], on: Iterable[int], off: Iterable[int]) -> Optional[bool]:
+    """A Lucid enum read as on or off: True in `on`, False in `off`, None for 0 (the car
+    not saying) or a value neither set names."""
+    if value in on:
+        return True
+    if value in off:
+        return False
+    return None
+
+
+# MaxACState: 0 UNKNOWN, 1 OFF, 2 ON.
+MAX_AC_ON, MAX_AC_OFF = {2}, {1}
+# KeepClimateStatus: 0 UNKNOWN, 1 INACTIVE, 2 ENABLED, 3 CANCELED, 4 PET_MODE_ON. Creature
+# comfort is the pet mode; keep-climate without it is not. CreatureComfortMode, which the
+# command sends, is 1 OFF, 2 ON.
+CREATURE_COMFORT_ON, CREATURE_COMFORT_OFF = {4}, {1, 2, 3}
+CREATURE_COMFORT_MODE = {True: 2, False: 1}
+
+# SeatClimateMode: 0 UNKNOWN, 2 OFF, 3 LOW, 4 MEDIUM, 5 HIGH (there is no 1).
+SEAT_MODE = {ClimateLevel.OFF: 2, ClimateLevel.LOW: 3, ClimateLevel.MEDIUM: 4, ClimateLevel.HIGH: 5}
+_SEAT_LEVEL = {mode: level for level, mode in SEAT_MODE.items()}
+# SteeringWheelHeaterLevel: 0 UNKNOWN, 1 OFF, 2 LEVEL_1, 3 LEVEL_2, 4 LEVEL_3.
+STEERING_LEVEL = {ClimateLevel.OFF: 1, ClimateLevel.LOW: 2, ClimateLevel.MEDIUM: 3, ClimateLevel.HIGH: 4}
+_STEERING_CLIMATE_LEVEL = {level: climate for climate, level in STEERING_LEVEL.items()}
+
+# The request and HvacState.seats share these field names. The car's heat zones come in
+# bound pairs (the library notes zone 2 and 4 cannot be set apart on an Air), so the
+# command sets a whole seat at once, as the app does.
+_SEAT = SeatClimateCommand.Seat
+_HEAT, _VENT = SeatClimateCommand.Mode.HEAT, SeatClimateCommand.Mode.VENT
+SEAT_ZONES = {
+    (_SEAT.DRIVER, _HEAT): ("driver_heat_backrest_zone1", "driver_heat_backrest_zone3", "driver_heat_cushion_zone2", "driver_heat_cushion_zone4"),
+    (_SEAT.DRIVER, _VENT): ("driver_vent_backrest", "driver_vent_cushion"),
+    (_SEAT.FRONT_PASSENGER, _HEAT): ("front_passenger_heat_backrest_zone1", "front_passenger_heat_backrest_zone3",
+                                     "front_passenger_heat_cushion_zone2", "front_passenger_heat_cushion_zone4"),
+    (_SEAT.FRONT_PASSENGER, _VENT): ("front_passenger_vent_backrest", "front_passenger_vent_cushion"),
+    (_SEAT.REAR_LEFT, _HEAT): ("rear_passenger_heat_left",),
+    (_SEAT.REAR_CENTER, _HEAT): ("rear_passenger_heat_center",),
+    (_SEAT.REAR_RIGHT, _HEAT): ("rear_passenger_heat_right",),
+}
+
+
+def seat_attribute(seat: SeatClimateCommand.Seat, mode: SeatClimateCommand.Mode) -> str:
+    """The published attribute for one seat's heat or ventilation: seat_heat_driver and so on."""
+    return f"seat_{mode.value}_{seat.value.replace('-', '_')}"
+
+
+def seat_level(modes: Iterable[Optional[int]]) -> Optional[ClimateLevel]:
+    """One seat's level from its zones: the warmest (or most ventilated) one, since that is
+    what someone sitting in it feels. None when no zone has said."""
+    levels = [_SEAT_LEVEL[mode] for mode in modes if mode in _SEAT_LEVEL]
+    if not levels:
+        return None
+    order = list(SEAT_MODE)
+    return max(levels, key=order.index)
+
+
+def steering_wheel_level(level: Optional[int]) -> Optional[ClimateLevel]:
+    """The steering wheel heater's level; None when unknown."""
+    return _STEERING_CLIMATE_LEVEL.get(level) if level is not None else None
 
 
 # ChassisState carries four pressures in bar and, per wheel, a hard and a soft warning
