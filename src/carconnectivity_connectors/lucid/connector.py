@@ -10,7 +10,9 @@ nothing in vampire drain.
 
 Read-only unless the config says `"commands": true`. Then, and only then, each
 vehicle gets CarConnectivity commands (charging, charge limit, climatization,
-defrost, locks, trunk and frunk, lights and horn, wake) as set-hooks that run on
+defrost, locks, trunk and frunk, lights and horn, wake; from 0.3.0 Sentry and the
+alarm, windows, charge port, headlights, seat and steering wheel heat, Max A/C,
+creature comfort, battery preconditioning, AC current limit) as set-hooks that run on
 the caller's thread through the poller's own session. They are the only thing
 that ever wakes the car, and they do it explicitly (LucidSession.command).
 """
@@ -134,7 +136,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             raise ValueError('commands must be true or false')
         self.active_config['commands'] = commands
         if commands:
-            LOG.warning('Commands are enabled: this connector can lock, unlock, open and wake the car')
+            LOG.warning('Commands are enabled: this connector can lock, unlock, open, disarm and wake the car')
 
         self._session = LucidSession(Path(self.active_config['refresh_token_file']).expanduser())
 

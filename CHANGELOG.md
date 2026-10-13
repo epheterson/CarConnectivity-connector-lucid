@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0] - unreleased
+
+### Added
+- **The rest of what the Lucid app can do, still behind `"commands": true`** and sent exactly as 0.2.0's commands are: once, no retry, the car woken first if the last poll saw it asleep, one 60 s deadline.
+  - Halo Secure: Sentry, enhanced deterrence, Sentry at home and at work on and off, silencing a Sentry alarm, and the security alarm mode (on, off, silent).
+  - All four windows vent or close; the charge port door opens and closes; the headlights turn on and off.
+  - Seat heating and ventilation per seat (front seats both, rear seats heat) at off, low, medium or high; the steering wheel heater at the same four levels; Max A/C and creature comfort on and off.
+  - Battery preconditioning on and off, and the AC charging current limit as a settable `charging.settings.maximum_current`, whole amps from 8 to 80.
+  - Every command and its REST path is in the README's Commands table. Values outside a command's set are refused before anything is sent.
+- **The state those commands change**, so a UI can show each as a toggle: `enhanced_deterrence`, `alarm`, `charge_port` (the port's door, kept out of `doors` so charging is not "a door open"), `lights.light_state` from the headlights, `max_ac`, `creature_comfort`, `steering_wheel_heater`, a level per seat (`seat_heat_driver` and the rest; a seat's level is its warmest zone), `battery_preconditioning`, and `charging.settings.maximum_current`. These follow the protobuf's enum names and are not yet checked against a car.
+
+### Not added, on purpose
+- **Software updates** (`apply_update`): the car cannot be driven while one installs, and that is a decision for the car or the app with the release notes in view, not a remote button.
+
 ## 0.2.0 (2026-10-12)
 
 ### Added

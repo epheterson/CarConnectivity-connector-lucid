@@ -4,7 +4,7 @@
 
 A [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity) connector for Lucid Motors vehicles (Air and Gravity), built on [python-lucidmotors](https://github.com/nshp/python-lucidmotors).
 
-**Read-only by default.** It polls the same mobile API the Lucid app uses and populates the CarConnectivity model: state, odometer, battery level / range / capacity / cell temperatures, charging state and target, position, doors and locks, climatization, software version. Reads never wake the car, so polling costs nothing in battery drain. Commands (lock, climate, charging, trunk and the rest) exist from 0.2.0 but stay off unless the config turns them on; see [Commands](#commands).
+**Read-only by default.** It polls the same mobile API the Lucid app uses and populates the CarConnectivity model: state, odometer, battery level / range / capacity / cell temperatures, charging state and target, position, doors and locks, climatization, software version. Reads never wake the car, so polling costs nothing in battery drain. Commands (lock, climate, charging, trunk, Sentry, seats and the rest) exist from 0.2.0 but stay off unless the config turns them on; see [Commands](#commands).
 
 Verified against a 2026 Gravity on 2026-09-03.
 
@@ -63,6 +63,41 @@ Off by default. Without the option the connector creates no command objects at a
 | Frunk | `doors/commands/frunk` | `open`, `close` | `frunk_open` / `frunk_close` |
 | Lights and horn | `commands/honk-flash` | `flash`, `honk-and-flash` | `lights_flash`, `honk_horn` |
 | Wake | `commands/wake-sleep` | `wake` (a Lucid cannot be sent to sleep) | `wakeup_vehicle` |
+| Sentry (Halo Secure) | `commands/sentry` | `on`, `off` | `sentry_mode_on` / `sentry_mode_off` |
+| Enhanced deterrence | `commands/enhanced-deterrence` | `on`, `off` | `enhanced_deterrence_on` / `_off` |
+| Sentry at home | `commands/sentry-at-home` | `on`, `off` | `sentry_mode_at_home_on` / `_off` |
+| Sentry at work | `commands/sentry-at-work` | `on`, `off` | `sentry_mode_at_work_on` / `_off` |
+| Silence a Sentry alarm | `commands/sentry-alarm` | `off` (an alarm cannot be set off remotely) | `turn_off_sentry_alarm` |
+| Security alarm | `commands/alarm` | `on`, `off`, `silent` (notifications only) | `alarm_control` |
+| Windows, all four | `commands/windows` | `vent` (drops them a little; again drops them further), `close` | `open_all_windows` / `close_all_windows` |
+| Charge port door | `doors/commands/charge-port` | `open`, `close` | `charge_port_open` / `charge_port_close` |
+| Headlights | `commands/lights` | `on`, `off` | `lights_on` / `lights_off` |
+| Max A/C | `climatization/commands/max-ac` | `on`, `off` | `max_ac_on` / `max_ac_off` |
+| Creature comfort | `climatization/commands/creature-comfort` | `on`, `off` | `creature_comfort_control` |
+| Seat heat and ventilation | `climatization/commands/seat-climate` | `<seat> <heat\|vent> <off\|low\|medium\|high>`, seat `driver`, `front-passenger`, `rear-left`, `rear-center`, `rear-right`; rear seats heat only | `seat_climate_control` (every zone of that seat) |
+| Steering wheel heater | `climatization/commands/steering-wheel-heater` | `off`, `low`, `medium`, `high` | `steering_wheel_heater_control` |
+| Battery preconditioning | `charging/commands/battery-preconditioning` | `on`, `off` | `battery_precon_on` / `battery_precon_off` |
+| AC current limit | `charging/settings/maximum_current` | whole amps, 8 to 80 | `set_ac_current_limit` |
+
+Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "mode": "heat", "level": "low"}`). The state each one changes is published where the API has it, so a UI can show a toggle:
+
+| state | attribute | from |
+|---|---|---|
+| Sentry on | `sentry` | `sentry_state.enablement_state` (enabled or idle) |
+| Enhanced deterrence on | `enhanced_deterrence` | `sentry_state.enhanced_deterrence_state` (enabled or idle) |
+| Alarm mode | `alarm` | `alarm.mode` |
+| Windows | `windows/...` | `body.window_position` |
+| Charge port door | `charge_port` | `body.charge_port` (not one of `doors`: it stands open for every charge) |
+| Headlights | `lights/light_state` | `chassis.headlights` |
+| Max A/C, creature comfort | `max_ac`, `creature_comfort` | `hvac.max_ac_status`, `hvac.keep_climate_status` (pet mode) |
+| Seat levels | `seat_heat_driver`, `seat_vent_driver`, `seat_heat_front_passenger`, `seat_vent_front_passenger`, `seat_heat_rear_left`, `seat_heat_rear_center`, `seat_heat_rear_right` | `hvac.seats` (a seat's warmest zone) |
+| Steering wheel heater | `steering_wheel_heater` | `hvac.steering_heater_level` |
+| Battery preconditioning | `battery_preconditioning` | `battery.preconditioning_status` |
+| AC current limit | `charging/settings/maximum_current` | `charging.energy_ac_current_limit` |
+
+Sentry at home and at work have no state in the API that the connector can read, so they are commands only.
+
+Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (the library offers vent and close only), and the sentry event and video history, which is a read API, not a command.
 
 How they behave:
 
