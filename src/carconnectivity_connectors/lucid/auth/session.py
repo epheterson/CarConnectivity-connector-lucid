@@ -28,7 +28,7 @@ LOG = logging.getLogger("carconnectivity.connectors.lucid.auth")
 REFRESH_MARGIN_S = 60.0  # must exceed the poll interval; 60 s min interval -> refresh has 2x margin on a 300 s token
 WAKE_SETTLE_S = 8.0  # a car that was asleep needs a moment after WakeupVehicle before it takes a command
 # The library sets no deadline on a command. Without one a call Lucid never answers holds
-# the session lock, and the poller with it, for good.
+# the session lock, and the poller with it, for good. It covers the whole command, login included.
 COMMAND_TIMEOUT_S = 60.0
 
 
@@ -154,15 +154,18 @@ class LucidSession:
         once: nothing here retries it, because a retried unlock or trunk is a second
         unlock or trunk if the first one landed and only its answer was lost."""
         async def _go():
-            api = await self._ensure()  # raises CarConnectivity errors already
+            # One deadline for the lot: a login or refresh, the wake, the settle pause and the command.
             try:
-                if wake_first:
-                    LOG.info("vehicle is asleep, waking it for a command")
-                    await asyncio.wait_for(api.wakeup_vehicle(lucid_vehicle), self._command_timeout_s)
-                    await asyncio.sleep(self._wake_settle_s)
-                await asyncio.wait_for(action(api, lucid_vehicle), self._command_timeout_s)
-            except asyncio.TimeoutError as exc:
+                async with asyncio.timeout(self._command_timeout_s):
+                    api = await self._ensure()  # raises CarConnectivity errors already
+                    try:
+                        if wake_first:
+                            LOG.info("vehicle is asleep, waking it for a command")
+                            await api.wakeup_vehicle(lucid_vehicle)
+                            await asyncio.sleep(self._wake_settle_s)
+                        await action(api, lucid_vehicle)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        raise translate_api_error(exc) from exc
+            except TimeoutError as exc:
                 raise RetrievalError(f"no answer from Lucid within {self._command_timeout_s:.0f}s; check the car before trying again") from exc
-            except Exception as exc:  # pylint: disable=broad-except
-                raise translate_api_error(exc) from exc
         self.run(_go())

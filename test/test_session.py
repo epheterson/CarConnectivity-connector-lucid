@@ -1,11 +1,13 @@
-"""Refresh cadence and error translation, with a fake LucidAPI."""
+"""Refresh cadence, error translation and the command deadline, with a fake LucidAPI."""
+import asyncio
 import json
+import time
 from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 
-from carconnectivity.errors import AuthenticationError, TemporaryAuthenticationError, TooManyRequestsError
+from carconnectivity.errors import AuthenticationError, RetrievalError, TemporaryAuthenticationError, TooManyRequestsError
 from carconnectivity_connectors.lucid.auth.session import LucidSession, REFRESH_MARGIN_S, translate_api_error
 
 
@@ -82,3 +84,47 @@ def test_error_translation():
         return SimpleNamespace(code=SimpleNamespace(name=code_name))
     assert isinstance(translate_api_error(err("RESOURCE_EXHAUSTED")), TooManyRequestsError)
     assert isinstance(translate_api_error(err("UNAUTHENTICATED")), TemporaryAuthenticationError)
+
+
+def _sent(calls):
+    async def action(api, vehicle):
+        calls.append("action")
+    return action
+
+
+def test_a_login_that_never_answers_is_inside_the_command_deadline(token_file):
+    """_ensure() logs in or refreshes before the command; a hang there must not hold the
+    session lock, and the poller with it, for good."""
+    fake = FakeAPI(remaining_s=300)
+
+    async def hang(token):
+        await asyncio.sleep(10)
+    fake.login_with_refresh_token = hang
+    s = LucidSession(token_file, api_factory=lambda: fake)
+    s._command_timeout_s = 0.1
+    s.start()
+    calls = []
+    started = time.monotonic()
+    with pytest.raises(RetrievalError, match="no answer"):
+        s.command(SimpleNamespace(vehicle_id="vid-1"), _sent(calls))
+    assert time.monotonic() - started < 2
+    assert calls == []
+    s.close()
+
+
+def test_one_deadline_covers_wake_settle_and_command(token_file):
+    """Not one per step: a wake, the settle pause and the command together get the deadline once."""
+    fake = FakeAPI(remaining_s=300)
+
+    async def wakeup_vehicle(vehicle):
+        await asyncio.sleep(0.15)
+    fake.wakeup_vehicle = wakeup_vehicle
+    s = LucidSession(token_file, api_factory=lambda: fake)
+    s._command_timeout_s = 0.25
+    s._wake_settle_s = 0.15
+    s.start()
+    calls = []
+    with pytest.raises(RetrievalError, match="no answer"):
+        s.command(SimpleNamespace(vehicle_id="vid-1"), _sent(calls), wake_first=True)
+    assert calls == []
+    s.close()
