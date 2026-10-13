@@ -257,6 +257,8 @@ def two_state(value: Optional[int], on: Iterable[int], off: Iterable[int]) -> Op
     return None
 
 
+# BatteryPreconStatus: 0 UNKNOWN, 1 OFF, 2 ON, 3 UNAVAILABLE (which is not on).
+PRECON_ON, PRECON_OFF = {2}, {1, 3}
 # MaxACState: 0 UNKNOWN, 1 OFF, 2 ON.
 MAX_AC_ON, MAX_AC_OFF = {2}, {1}
 # KeepClimateStatus: 0 UNKNOWN, 1 INACTIVE, 2 ENABLED, 3 CANCELED, 4 PET_MODE_ON. Creature

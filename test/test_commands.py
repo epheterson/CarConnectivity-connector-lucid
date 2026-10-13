@@ -154,6 +154,9 @@ LIBRARY_CALLS = {
     "creature_comfort_control": ("mode",),
     "steering_wheel_heater_control": ("level",),
     "seat_climate_control": ("kwargs",),
+    "battery_precon_on": (),
+    "battery_precon_off": (),
+    "set_ac_current_limit": ("current_limit",),
 }
 
 
@@ -617,4 +620,34 @@ def test_seat_climate_sets_every_zone_of_one_seat(rig, value, zones):
 def test_climate_levels_out_of_range_never_reach_the_car(rig, name, value):
     with pytest.raises(SetterError):
         rig.vehicle.climatization.commands.commands[name].value = value
+    assert rig.api.calls == []
+
+
+# -- 0.3.0: charging -----------------------------------------------------------------
+@pytest.mark.parametrize("value,method", [("on", "battery_precon_on"), ("off", "battery_precon_off")])
+def test_battery_preconditioning(rig, value, method):
+    rig.vehicle.charging.commands.commands["battery-preconditioning"].value = value
+    assert rig.api.calls == [(method, ("vid-1",))]
+
+
+def test_ac_current_limit_is_not_settable_by_default(readonly):
+    current = readonly.vehicle.charging.settings.maximum_current
+    assert not current._is_changeable
+    with pytest.raises(TypeError):
+        current.value = 32
+    assert readonly.api.calls == []
+
+
+def test_ac_current_limit_sets_through_the_library(rig):
+    current = rig.vehicle.charging.settings.maximum_current
+    assert current._is_changeable and (current.minimum, current.maximum, current.precision) == (8.0, 80.0, 1.0)
+    current.value = 32
+    assert rig.api.calls == [("set_ac_current_limit", ("vid-1", 32))]
+
+
+@pytest.mark.parametrize("bad", [7, 81, 0, -16, 16.5, "abc", True, float("nan"), None])
+def test_ac_current_limit_rejects_bad_values(rig, bad):
+    assert rig.vehicle.charging.settings.maximum_current._is_changeable, "refused by the connector, not by a read-only attribute"
+    with pytest.raises((SetterError, ValueError, TypeError)):
+        rig.vehicle.charging.settings.maximum_current.value = bad
     assert rig.api.calls == []

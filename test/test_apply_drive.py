@@ -212,3 +212,17 @@ def test_climate_toggles_and_heater_levels_are_published(vehicle):
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
     assert vehicle.max_ac.value is False and vehicle.creature_comfort.value is False, "keep climate on is not pet mode"
     assert str(vehicle.steering_wheel_heater.value) == "off"
+
+
+def test_battery_preconditioning_and_the_ac_current_limit_are_published(vehicle):
+    st = SimpleNamespace(battery=SimpleNamespace(preconditioning_status=2),
+                         charging=SimpleNamespace(charge_state=1, energy_ac_current_limit=40, active_session_ac_current_limit=0))
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    Connector._apply_charging(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.battery_preconditioning.value is True
+    assert vehicle.charging.settings.maximum_current.value == 40
+    st.battery.preconditioning_status, st.charging.energy_ac_current_limit = 3, 0
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    Connector._apply_charging(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.battery_preconditioning.value is False, "unavailable is not on"
+    assert vehicle.charging.settings.maximum_current.value is None, "0 is the car not saying, not a 0 A limit"

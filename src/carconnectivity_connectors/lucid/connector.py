@@ -58,6 +58,10 @@ _f = mapping._f  # pylint: disable=protected-access
 
 # The charge limit the Lucid app offers, whole percent.
 CHARGE_LIMIT_MIN, CHARGE_LIMIT_MAX = 50, 100
+# The AC charging current limit, whole amps. 8 A is the floor other Lucid clients already
+# send; the 6 A an EVSE may signal is untried against the car, so it is not offered. 80 A
+# is the Air's 19.2 kW onboard charger at 240 V.
+AC_CURRENT_MIN, AC_CURRENT_MAX = 8, 80
 # Plausible cabin set-points in Celsius: a guard against a unit mix-up (68 sent as C),
 # not a claim about what the car accepts.
 CABIN_TEMP_MIN_C, CABIN_TEMP_MAX_C = 10.0, 35.0
@@ -263,7 +267,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
 
     # -- commands --------------------------------------------------------------
     def _add_commands(self, vehicle: GenericVehicle) -> None:
-        """Give the vehicle its commands and a settable charge limit; safe to call every poll.
+        """Give the vehicle its commands, a settable charge limit and AC current limit; safe to call every poll.
         Only called when the config enables commands."""
         if not isinstance(vehicle, LucidElectricVehicle):
             return
@@ -317,6 +321,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 choice: (f'set steering wheel heater {choice}', lambda api, v, level=level: api.steering_wheel_heater_control(v, level))
                 for choice, level in mapping.STEERING_LEVEL.items()})),
             (vehicle.climatization.commands, SeatClimateCommand, 'seat-climate', self._on_seat_climate),
+            (vehicle.charging.commands, OnOffCommand, 'battery-preconditioning', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on battery preconditioning', lambda api, v: api.battery_precon_on(v)),
+                OnOffCommand.Command.OFF: ('turn off battery preconditioning', lambda api, v: api.battery_precon_off(v))})),
         )
         for commands, kind, name, hook in wanted:
             if not commands.contains_command(name):
@@ -329,6 +336,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             target.minimum, target.maximum, target.precision = float(CHARGE_LIMIT_MIN), float(CHARGE_LIMIT_MAX), 1.0
             target._add_on_set_hook(self._on_target_level)
             target._is_changeable = True
+        current = vehicle.charging.settings.maximum_current
+        if not current._is_changeable:
+            current.minimum, current.maximum, current.precision = float(AC_CURRENT_MIN), float(AC_CURRENT_MAX), 1.0
+            current._add_on_set_hook(self._on_maximum_current)
+            current._is_changeable = True
 
     @staticmethod
     def _vehicle_of(obj: Any) -> LucidElectricVehicle:
@@ -499,6 +511,17 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._send(vehicle, f'set charge limit to {int(value)}%', lambda api, v: api.set_charge_limit(v, int(value)), error=SetterError)
         return value
 
+    def _on_maximum_current(self, attribute: GenericAttribute, value: Any) -> Any:
+        try:
+            vehicle = self._vehicle_of(attribute)
+        except CommandError as err:
+            raise SetterError(str(err)) from err
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not AC_CURRENT_MIN <= value <= AC_CURRENT_MAX \
+                or float(value) != int(value):
+            raise SetterError(f'AC current limit must be whole amps from {AC_CURRENT_MIN} to {AC_CURRENT_MAX}, not {value!r}')
+        self._send(vehicle, f'set AC current limit to {int(value)} A', lambda api, v: api.set_ac_current_limit(v, int(value)), error=SetterError)
+        return value
+
     # -- mapping ---------------------------------------------------------------
     def _apply(self, vehicle: LucidVehicle, lv: Any) -> None:
         """Copy one Lucid vehicle (config + state) into the CarConnectivity model."""
@@ -583,6 +606,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # a cable. A plug-in reminder downstream waits on exactly this attribute.
         sv.charging.connector.connection_state._set_value(mapping.connector_connection_state(cs), measured=measured)
         sv.charging.connector.external_power._set_value(mapping.external_power(cs), measured=measured)
+        # The AC current limit as set, which the car keeps between sessions; the active
+        # session's own limit can be lower, held down by the charger. 0 is the car not saying.
+        ac_limit = _f(_dig(ch, "energy_ac_current_limit"))
+        sv.charging.settings.maximum_current._set_value(ac_limit if ac_limit else None, measured=measured)
 
     @staticmethod
     def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -697,6 +724,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
         sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
+        sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
+                                              measured=measured)
         hvac = _dig(st, "hvac")
         sv.max_ac._set_value(mapping.two_state(_dig(hvac, "max_ac_status"), mapping.MAX_AC_ON, mapping.MAX_AC_OFF), measured=measured)
         sv.creature_comfort._set_value(mapping.two_state(_dig(hvac, "keep_climate_status"), mapping.CREATURE_COMFORT_ON, mapping.CREATURE_COMFORT_OFF),
