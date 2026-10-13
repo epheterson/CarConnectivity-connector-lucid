@@ -144,17 +144,19 @@ class LucidSession:
                 raise translate_api_error(exc) from exc
         return self.run(_go())
 
-    def command(self, lucid_vehicle: Any, action: Callable[[Any, Any], Any], wake: bool = True) -> None:
+    def command(self, lucid_vehicle: Any, action: Callable[[Any, Any], Any], wake_first: bool = False) -> None:
         """Run one vehicle command on the shared API and loop. Callable from any thread.
 
-        The only path that wakes the car. A car the last poll saw asleep is woken
-        explicitly, once, and given WAKE_SETTLE_S to listen. The command itself is sent
+        The only path that wakes the car. With `wake_first`, the caller's reading of the last
+        poll by mapping.is_awake, the car is woken explicitly, once, and given WAKE_SETTLE_S
+        to listen. Not lucidmotors' vehicle_is_awake: that calls only SLEEP asleep, and a car
+        in CLOUD_2 or SLEEP_CHARGE does not take a command either. The command itself is sent
         once: nothing here retries it, because a retried unlock or trunk is a second
         unlock or trunk if the first one landed and only its answer was lost."""
         async def _go():
             api = await self._ensure()  # raises CarConnectivity errors already
             try:
-                if wake and not api.vehicle_is_awake(lucid_vehicle):
+                if wake_first:
                     LOG.info("vehicle is asleep, waking it for a command")
                     await asyncio.wait_for(api.wakeup_vehicle(lucid_vehicle), self._command_timeout_s)
                     await asyncio.sleep(self._wake_settle_s)

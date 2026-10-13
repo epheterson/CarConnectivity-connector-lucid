@@ -311,8 +311,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if lucid_vehicle is None:
             raise error('Vehicle has not been fetched from Lucid yet')
         LOG.info('Command %s for vehicle ...%s', what, vin[-4:])
+        asleep = not mapping.is_awake(_dig(lucid_vehicle, "state", "power"), _dig(lucid_vehicle, "state", "charging", "charge_state"))
         try:
-            self._session.command(lucid_vehicle, action, wake=wake)
+            self._session.command(lucid_vehicle, action, wake_first=wake and asleep)
         except (RetrievalError, AuthenticationError, RuntimeError) as err:
             LOG.error('Command %s for vehicle ...%s failed: %s', what, vin[-4:], err)
             raise error(f'{what} failed: {err}') from err

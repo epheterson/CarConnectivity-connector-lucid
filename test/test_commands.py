@@ -21,10 +21,12 @@ VIN = "LUCIDTESTVIN00042"
 
 
 class FakeAPI:
-    """Records every call as (method, args). Awake or asleep is whatever `asleep` says."""
+    """Records every call as (method, args). The car's power state is `power`, read as the
+    next poll's; asleep or awake is the connector's call from that, as on a real car."""
 
     def __init__(self):
-        self.asleep = False
+        self.power = 3  # ACCESSORY: awake
+        self.charge_state = None
         self.calls = []
         self.fail_with = None
         self.hang = False
@@ -42,16 +44,15 @@ class FakeAPI:
         return timedelta(seconds=300)
 
     def vehicle_is_awake(self, vehicle):
-        return not self.asleep
+        # lucidmotors 1.4.2's own answer, false only for POWER_STATE_SLEEP; the connector
+        # must not rely on it, since CLOUD_2 and the rest are asleep too.
+        return vehicle.state.power != 1
 
     async def fetch_vehicles(self):
         self.calls.append(("fetch_vehicles", ()))
         await self._busy()
-        return [
-            SimpleNamespace(
-                vehicle_id="vid-1", config=SimpleNamespace(vin=VIN, nickname="Alpha", model=2), state=SimpleNamespace(last_updated_ms=1_700_000_000_000)
-            )
-        ]
+        state = SimpleNamespace(last_updated_ms=1_700_000_000_000, power=self.power, charging=SimpleNamespace(charge_state=self.charge_state))
+        return [SimpleNamespace(vehicle_id="vid-1", config=SimpleNamespace(vin=VIN, nickname="Alpha", model=2), state=state)]
 
     async def close(self):
         pass
@@ -138,6 +139,13 @@ def _rig(tmp_path, config):
     connector.fetch_vehicles()
     api.calls.clear()
     return SimpleNamespace(connector=connector, api=api, vehicle=cc.garage.get_vehicle(VIN), cc=cc)
+
+
+def _poll_sees(rig, power):
+    """The car goes to `power` and the next poll sees it, as a command would find it."""
+    rig.api.power = power
+    rig.connector.fetch_vehicles()
+    rig.api.calls.clear()
 
 
 @pytest.fixture
@@ -237,7 +245,7 @@ def test_another_poll_does_not_duplicate_or_rehook(rig):
 
 
 def test_polling_never_wakes_a_sleeping_car(rig):
-    rig.api.asleep = True
+    rig.api.power = 1
     for _ in range(3):
         rig.connector.fetch_vehicles()
     assert set(rig.api.names()) == {"fetch_vehicles"}
@@ -323,7 +331,7 @@ def test_flash_and_honk_and_flash(rig):
 
 
 def test_wake_wakes_once_and_sleep_is_refused(rig):
-    rig.api.asleep = True
+    _poll_sees(rig, 1)
     cmd = rig.vehicle.commands.commands["wake-sleep"]
     cmd.value = "wake"
     assert rig.api.calls == [("wakeup_vehicle", ("vid-1",))]
@@ -336,10 +344,24 @@ def test_a_command_wakes_a_sleeping_car_first_and_not_an_awake_one(rig):
     cmd = rig.vehicle.doors.commands.commands["lock-unlock"]
     cmd.value = "lock"
     assert rig.api.names() == ["doors_lock"]
-    rig.api.calls.clear()
-    rig.api.asleep = True
+    _poll_sees(rig, 1)
     cmd.value = "lock"
     assert rig.api.names() == ["wakeup_vehicle", "doors_lock"]
+
+
+@pytest.mark.parametrize("power", [6, 8, 9, 10, 12, 13])
+def test_every_power_state_the_poller_calls_asleep_is_woken_for_a_command(rig, power):
+    """The library calls only SLEEP asleep; CLOUD_2 and the rest take no command either."""
+    _poll_sees(rig, power)
+    rig.vehicle.doors.commands.commands["lock-unlock"].value = "lock"
+    assert rig.api.names() == ["wakeup_vehicle", "doors_lock"]
+
+
+def test_a_car_charging_in_sleep_charge_is_awake_and_not_woken(rig):
+    rig.api.charge_state = 8  # CHARGING
+    _poll_sees(rig, 6)
+    rig.vehicle.doors.commands.commands["lock-unlock"].value = "lock"
+    assert rig.api.names() == ["doors_lock"]
 
 
 @pytest.mark.parametrize(
