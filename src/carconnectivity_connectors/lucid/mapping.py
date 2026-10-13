@@ -11,6 +11,7 @@ from typing import Any, Iterable, Optional
 
 from carconnectivity.charging import Charging, ChargingConnector
 from carconnectivity.doors import Doors
+from carconnectivity.lights import Lights
 from carconnectivity.windows import Windows
 from carconnectivity.position import Position
 from carconnectivity.vehicle import GenericVehicle
@@ -232,6 +233,18 @@ _ALARM_MODES = {1: AlarmCommand.Command.OFF, 2: AlarmCommand.Command.ON, 3: Alar
 def alarm_mode(mode: Optional[int]) -> Optional[AlarmCommand.Command]:
     """The security alarm's mode in the words the alarm command takes; None when unknown."""
     return _ALARM_MODES.get(mode) if mode is not None else None
+
+
+# chassis.headlights is typed LightAction: 0 UNKNOWN, 1 FLASH, 2 ON, 3 OFF, 4 HAZARD_ON,
+# 5 HAZARD_OFF. Only ON and OFF say whether the headlights are on.
+LIGHT_ON, LIGHT_OFF = 2, 3
+
+
+def headlights(action: Optional[int]) -> Optional[Lights.LightState]:
+    """Whether the headlights are on; None when the car has not said, UNKNOWN for a flash or hazard."""
+    if action is None or action == 0:
+        return None
+    return {LIGHT_ON: Lights.LightState.ON, LIGHT_OFF: Lights.LightState.OFF}.get(action, Lights.LightState.UNKNOWN)
 
 
 # ChassisState carries four pressures in bar and, per wheel, a hard and a soft warning

@@ -42,7 +42,8 @@ from carconnectivity.vehicle import GenericVehicle
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession, translate_api_error
-from carconnectivity_connectors.lucid.vehicle import AlarmCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, OpenCloseCommand
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, OpenCloseCommand, \
+    WindowsCommand
 from carconnectivity_connectors.lucid._version import __version__
 
 if TYPE_CHECKING:
@@ -294,6 +295,16 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.commands, AlarmCommand, 'alarm', self._choice_hook({
                 choice: (f'set the alarm {choice}', lambda api, v, mode=mode: api.alarm_control(v, mode))
                 for choice, mode in ((AlarmCommand.Command.OFF, 1), (AlarmCommand.Command.ON, 2), (AlarmCommand.Command.SILENT, 3))})),
+            # Windows, charge port, headlights.
+            (vehicle.commands, WindowsCommand, 'windows', self._choice_hook({
+                WindowsCommand.Command.VENT: ('vent windows', lambda api, v: api.open_all_windows(v)),
+                WindowsCommand.Command.CLOSE: ('close windows', lambda api, v: api.close_all_windows(v))})),
+            (vehicle.doors.commands, OpenCloseCommand, 'charge-port', self._choice_hook({
+                OpenCloseCommand.Command.OPEN: ('open charge port', lambda api, v: api.charge_port_open(v)),
+                OpenCloseCommand.Command.CLOSE: ('close charge port', lambda api, v: api.charge_port_close(v))})),
+            (vehicle.commands, OnOffCommand, 'lights', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on headlights', lambda api, v: api.lights_on(v)),
+                OnOffCommand.Command.OFF: ('turn off headlights', lambda api, v: api.lights_off(v))})),
         )
         for commands, kind, name, hook in wanted:
             if not commands.contains_command(name):
@@ -659,6 +670,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # EnhancedDeterrenceState shares SentryEnablementState's numbers: 1 enabled, 2 disabled, 3 idle.
         sv.enhanced_deterrence._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enhanced_deterrence_state")), measured=measured)
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
+        sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
+        sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
 
     # -- identity --------------------------------------------------------------
     def get_version(self) -> str:

@@ -142,6 +142,12 @@ LIBRARY_CALLS = {
     "sentry_mode_at_work_off": (),
     "turn_off_sentry_alarm": (),
     "alarm_control": ("mode",),
+    "open_all_windows": (),
+    "close_all_windows": (),
+    "charge_port_open": (),
+    "charge_port_close": (),
+    "lights_on": (),
+    "lights_off": (),
 }
 
 
@@ -536,3 +542,27 @@ def test_a_failed_new_command_is_sent_once_and_named(rig):
     with pytest.raises(CommandError, match="^turn off sentry failed:"):
         rig.vehicle.commands.commands["sentry"].value = "off"
     assert rig.api.names() == ["sentry_mode_off"]
+
+
+# -- 0.3.0: windows, charge port, headlights ---------------------------------------
+@pytest.mark.parametrize(
+    "path,value,method",
+    [
+        (("commands", "windows"), "vent", "open_all_windows"),
+        (("commands", "windows"), "close", "close_all_windows"),
+        (("doors", "charge-port"), "open", "charge_port_open"),
+        (("doors", "charge-port"), "close", "charge_port_close"),
+        (("commands", "lights"), "on", "lights_on"),
+        (("commands", "lights"), "off", "lights_off"),
+    ],
+)
+def test_windows_charge_port_and_headlights(rig, path, value, method):
+    owner = rig.vehicle if path[0] == "commands" else getattr(rig.vehicle, path[0])
+    owner.commands.commands[path[1]].value = value
+    assert rig.api.calls == [(method, ("vid-1",))]
+
+
+def test_windows_do_not_claim_a_full_open(rig):
+    with pytest.raises(SetterError):
+        rig.vehicle.commands.commands["windows"].value = "open"
+    assert rig.api.calls == []

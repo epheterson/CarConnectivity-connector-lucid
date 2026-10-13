@@ -8,6 +8,7 @@ from enum import Enum
 
 from carconnectivity.attributes import BooleanAttribute, EnumAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
 from carconnectivity.commands import GenericCommand
+from carconnectivity.doors import Doors
 from carconnectivity.errors import SetterError
 from carconnectivity.units import Speed, Temperature
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
@@ -71,6 +72,10 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.enhanced_deterrence: BooleanAttribute = BooleanAttribute(name="enhanced_deterrence", parent=self, tags={'connector_custom'})
         self.alarm: EnumAttribute[AlarmCommand.Command] = EnumAttribute(name="alarm", parent=self, value_type=AlarmCommand.Command,
                                                                         tags={'connector_custom'})
+        # The charge port's door, which the model has no slot for. Not one of `doors`: the
+        # door stands open for every charge, and "doors open" would then mean "charging".
+        self.charge_port: EnumAttribute[Doors.OpenState] = EnumAttribute(name="charge_port", parent=self, value_type=Doors.OpenState,
+                                                                         tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):

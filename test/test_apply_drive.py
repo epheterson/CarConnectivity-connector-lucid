@@ -182,3 +182,17 @@ def test_halo_secure_state_is_published(vehicle):
     st.sentry_state.enhanced_deterrence_state, st.alarm.mode = 2, 0
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
     assert vehicle.enhanced_deterrence.value is False and vehicle.alarm.value is None
+
+
+def test_charge_port_door_and_headlights_are_published(vehicle):
+    from carconnectivity.doors import Doors
+    from carconnectivity.lights import Lights
+
+    st = SimpleNamespace(body=SimpleNamespace(charge_port=1), chassis=SimpleNamespace(headlights=2))
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.charge_port.value is Doors.OpenState.OPEN
+    assert vehicle.lights.light_state.value is Lights.LightState.ON
+    assert vehicle.doors.open_state.value is not Doors.OpenState.OPEN, "a charge port door is not a door: charging is not 'doors open'"
+    st.body.charge_port, st.chassis.headlights = 2, 3
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.charge_port.value is Doors.OpenState.CLOSED and vehicle.lights.light_state.value is Lights.LightState.OFF

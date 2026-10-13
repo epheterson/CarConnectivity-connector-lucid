@@ -210,3 +210,9 @@ def test_one_moving_car_sets_the_pace_for_the_account():
 def test_alarm_mode(mode, want):
     got = m.alarm_mode(mode)
     assert (None if got is None else str(got)) == want
+
+
+@pytest.mark.parametrize("action,want", [(2, "on"), (3, "off"), (1, "unknown light state"), (4, "unknown light state"), (0, None), (None, None)])
+def test_headlights(action, want):
+    got = m.headlights(action)
+    assert (None if got is None else got.value) == want
