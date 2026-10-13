@@ -21,7 +21,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from carconnectivity.errors import AuthenticationError, RetrievalError, TemporaryAuthenticationError, TooManyRequestsError
+from carconnectivity.errors import AuthenticationError, CarConnectivityError, RetrievalError, TemporaryAuthenticationError, TooManyRequestsError
 
 LOG = logging.getLogger("carconnectivity.connectors.lucid.auth")
 
@@ -43,7 +43,9 @@ def load_refresh_token(path: Path) -> str:
 def translate_api_error(exc: BaseException) -> Exception:
     """Map lucidmotors/gRPC failures onto CarConnectivity's error taxonomy so the
     connector loop backs off correctly (TooManyRequests -> 15 min, temporary auth
-    -> next interval)."""
+    -> next interval). One already translated passes through as it is."""
+    if isinstance(exc, CarConnectivityError):
+        return exc
     code = getattr(exc, "code", None)
     name = getattr(code, "name", str(code))
     if name == "RESOURCE_EXHAUSTED":

@@ -41,7 +41,7 @@ from carconnectivity.vehicle import GenericVehicle
 
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
-from carconnectivity_connectors.lucid.auth.session import LucidSession
+from carconnectivity_connectors.lucid.auth.session import LucidSession, translate_api_error
 from carconnectivity_connectors.lucid.vehicle import LucidElectricVehicle, LucidVehicle, OpenCloseCommand
 from carconnectivity_connectors.lucid._version import __version__
 
@@ -396,7 +396,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
 
         async def honk_and_flash(api: Any, v: Any) -> None:
             await api.honk_horn(v)
-            await api.lights_flash(v)
+            try:
+                await api.lights_flash(v)
+            except Exception as err:  # pylint: disable=broad-except
+                # Say the horn went, or a retry of honk-and-flash honks a second time.
+                raise RetrievalError(f'the horn sounded but the lights did not flash ({translate_api_error(err)}); '
+                                     'retry with flash alone') from err
         if self._command_name(command_arguments, HonkAndFlashCommand.Command) == HonkAndFlashCommand.Command.FLASH:
             self._send(vehicle, 'flash lights', lambda api, v: api.lights_flash(v))
         else:

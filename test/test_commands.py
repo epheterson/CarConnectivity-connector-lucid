@@ -346,6 +346,17 @@ def test_flash_and_honk_and_flash(rig):
     assert rig.api.names() == ["honk_horn", "lights_flash"]
 
 
+def test_a_flash_that_fails_after_the_horn_says_the_horn_sounded(rig, monkeypatch):
+    """So nobody retries honk-and-flash blindly and honks a second time."""
+    async def lights_flash(v):
+        rig.api.calls.append(("lights_flash", (v.vehicle_id,)))
+        raise type("E", (Exception,), {"code": SimpleNamespace(name="UNAVAILABLE")})("down")
+    monkeypatch.setattr(rig.api, "lights_flash", lights_flash)
+    with pytest.raises(CommandError, match="horn sounded but the lights did not flash"):
+        rig.vehicle.commands.commands["honk-flash"].value = "honk-and-flash"
+    assert rig.api.names() == ["honk_horn", "lights_flash"]
+
+
 def test_wake_wakes_once_and_sleep_is_refused(rig):
     _poll_sees(rig, 1)
     cmd = rig.vehicle.commands.commands["wake-sleep"]

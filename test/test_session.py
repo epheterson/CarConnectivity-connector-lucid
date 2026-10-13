@@ -84,6 +84,8 @@ def test_error_translation():
         return SimpleNamespace(code=SimpleNamespace(name=code_name))
     assert isinstance(translate_api_error(err("RESOURCE_EXHAUSTED")), TooManyRequestsError)
     assert isinstance(translate_api_error(err("UNAUTHENTICATED")), TemporaryAuthenticationError)
+    already = RetrievalError("the horn sounded but the lights did not flash")
+    assert translate_api_error(already) is already
 
 
 def _sent(calls):
