@@ -15,6 +15,7 @@ from carconnectivity.carconnectivity import CarConnectivity
 from carconnectivity.errors import CommandError, SetterError
 from carconnectivity.units import Temperature
 from carconnectivity_connectors.lucid.auth.session import LucidSession
+from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.connector import Connector
 
 VIN = "LUCIDTESTVIN00042"
@@ -118,6 +119,43 @@ class FakeAPI:
 
     def names(self):
         return [name for name, _ in self.calls]
+
+    def __getattr__(self, name):
+        # The 0.3.0 commands, recorded the same way. Only names the real library has: a
+        # test against a call that does not exist would pass here and fail on the car,
+        # so test_every_faked_call_is_one_the_library_has checks this list against it.
+        if name not in LIBRARY_CALLS:
+            raise AttributeError(name)
+
+        async def call(v, *args, **kwargs):
+            await self._record(name, v.vehicle_id, *args, *([kwargs] if kwargs else []))
+        return call
+
+
+LIBRARY_CALLS = {
+    "sentry_mode_on": (),
+    "sentry_mode_off": (),
+    "enhanced_deterrence_on": (),
+    "enhanced_deterrence_off": (),
+    "sentry_mode_at_home_on": (),
+    "sentry_mode_at_home_off": (),
+    "sentry_mode_at_work_on": (),
+    "sentry_mode_at_work_off": (),
+    "turn_off_sentry_alarm": (),
+    "alarm_control": ("mode",),
+    "open_all_windows": (),
+    "close_all_windows": (),
+    "lights_on": (),
+    "lights_off": (),
+    "max_ac_on": (),
+    "max_ac_off": (),
+    "creature_comfort_control": ("mode",),
+    "steering_wheel_heater_control": ("level",),
+    "seat_climate_control": ("kwargs",),
+    "battery_precon_on": (),
+    "battery_precon_off": (),
+    "set_ac_current_limit": ("current_limit",),
+}
 
 
 @pytest.fixture(autouse=True)
@@ -456,3 +494,161 @@ def test_commands_from_other_threads_never_overlap_the_poller(rig):
     assert rig.api.max_in_flight == 1
     assert rig.api.names().count("login") == 0, "no second login"
     assert rig.api.names().count("doors_lock") == 4
+
+
+def test_every_faked_call_is_one_the_library_has():
+    """The fake answers to these names; the real LucidAPI must too, with the same arguments."""
+    import inspect  # pylint: disable=import-outside-toplevel
+
+    lucidmotors = pytest.importorskip("lucidmotors")
+    for name, params in LIBRARY_CALLS.items():
+        method = getattr(lucidmotors.LucidAPI, name)
+        assert tuple(inspect.signature(method).parameters)[1:] == ("vehicle", *params), name
+    # seat_climate_control takes its zones as keyword arguments; each one sent must be a field of the request.
+    fields = set(lucidmotors.gen.vehicle_state_service_pb2.SeatClimateControlRequest.DESCRIPTOR.fields_by_name)
+    sent = {zone for zones in mapping.SEAT_ZONES.values() for zone in zones}
+    assert sent and sent <= fields
+
+
+# -- 0.3.0: Halo Secure ----------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,value,method",
+    [
+        ("sentry", "on", "sentry_mode_on"),
+        ("sentry", "off", "sentry_mode_off"),
+        ("enhanced-deterrence", "on", "enhanced_deterrence_on"),
+        ("enhanced-deterrence", "off", "enhanced_deterrence_off"),
+        ("sentry-at-home", "on", "sentry_mode_at_home_on"),
+        ("sentry-at-home", "off", "sentry_mode_at_home_off"),
+        ("sentry-at-work", "on", "sentry_mode_at_work_on"),
+        ("sentry-at-work", "off", "sentry_mode_at_work_off"),
+        ("sentry-alarm", "off", "turn_off_sentry_alarm"),
+    ],
+)
+def test_halo_secure(rig, name, value, method):
+    rig.vehicle.commands.commands[name].value = value
+    assert rig.api.calls == [(method, ("vid-1",))]
+
+
+def test_a_sentry_alarm_can_only_be_silenced(rig):
+    with pytest.raises(CommandError, match="off"):
+        rig.vehicle.commands.commands["sentry-alarm"].value = "on"
+    assert rig.api.calls == []
+
+
+@pytest.mark.parametrize("value,mode", [("off", 1), ("on", 2), ("silent", 3)])
+def test_alarm_mode(rig, value, mode):
+    rig.vehicle.commands.commands["alarm"].value = value
+    assert rig.api.calls == [("alarm_control", ("vid-1", mode))]
+
+
+def test_the_new_commands_wake_a_sleeping_car_first(rig):
+    _poll_sees(rig, 1)
+    rig.vehicle.commands.commands["sentry"].value = "off"
+    assert rig.api.names() == ["wakeup_vehicle", "sentry_mode_off"]
+
+
+def test_a_failed_new_command_is_sent_once_and_named(rig):
+    rig.api.fail_with = type("E", (Exception,), {"code": SimpleNamespace(name="UNAVAILABLE")})("down")
+    with pytest.raises(CommandError, match="^turn off sentry failed:"):
+        rig.vehicle.commands.commands["sentry"].value = "off"
+    assert rig.api.names() == ["sentry_mode_off"]
+
+
+# -- 0.3.0: windows, headlights ---------------------------------------
+@pytest.mark.parametrize(
+    "path,value,method",
+    [
+        (("commands", "windows"), "vent", "open_all_windows"),
+        (("commands", "windows"), "close", "close_all_windows"),
+        (("commands", "lights"), "on", "lights_on"),
+        (("commands", "lights"), "off", "lights_off"),
+    ],
+)
+def test_windows_and_headlights(rig, path, value, method):
+    owner = rig.vehicle if path[0] == "commands" else getattr(rig.vehicle, path[0])
+    owner.commands.commands[path[1]].value = value
+    assert rig.api.calls == [(method, ("vid-1",))]
+
+
+def test_windows_do_not_claim_a_full_open(rig):
+    with pytest.raises(SetterError):
+        rig.vehicle.commands.commands["windows"].value = "open"
+    assert rig.api.calls == []
+
+
+# -- 0.3.0: climate ------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "name,value,call",
+    [
+        ("max-ac", "on", ("max_ac_on", ("vid-1",))),
+        ("max-ac", "off", ("max_ac_off", ("vid-1",))),
+        ("creature-comfort", "on", ("creature_comfort_control", ("vid-1", 2))),
+        ("creature-comfort", "off", ("creature_comfort_control", ("vid-1", 1))),
+        ("steering-wheel-heater", "off", ("steering_wheel_heater_control", ("vid-1", 1))),
+        ("steering-wheel-heater", "low", ("steering_wheel_heater_control", ("vid-1", 2))),
+        ("steering-wheel-heater", "high", ("steering_wheel_heater_control", ("vid-1", 4))),
+    ],
+)
+def test_max_ac_creature_comfort_and_steering_wheel(rig, name, value, call):
+    rig.vehicle.climatization.commands.commands[name].value = value
+    assert rig.api.calls == [call]
+
+
+@pytest.mark.parametrize(
+    "value,zones",
+    [
+        (
+            "driver heat high",
+            {"driver_heat_backrest_zone1": 5, "driver_heat_backrest_zone3": 5, "driver_heat_cushion_zone2": 5, "driver_heat_cushion_zone4": 5},
+        ),
+        ("front-passenger vent low", {"front_passenger_vent_backrest": 3, "front_passenger_vent_cushion": 3}),
+        ({"seat": "rear-center", "mode": "heat", "level": "off"}, {"rear_passenger_heat_center": 2}),
+        ("rear-right heat medium", {"rear_passenger_heat_right": 4}),
+    ],
+)
+def test_seat_climate_sets_every_zone_of_one_seat(rig, value, zones):
+    rig.vehicle.climatization.commands.commands["seat-climate"].value = value
+    assert rig.api.calls == [("seat_climate_control", ("vid-1", zones))]
+
+
+@pytest.mark.parametrize("name,value", [("seat-climate", "rear-left vent high"), ("seat-climate", "driver heat 9"), ("steering-wheel-heater", "4")])
+def test_climate_levels_out_of_range_never_reach_the_car(rig, name, value):
+    with pytest.raises(SetterError):
+        rig.vehicle.climatization.commands.commands[name].value = value
+    assert rig.api.calls == []
+
+
+# -- 0.3.0: charging -----------------------------------------------------------------
+@pytest.mark.parametrize("value,method", [("on", "battery_precon_on"), ("off", "battery_precon_off")])
+def test_battery_preconditioning(rig, value, method):
+    rig.vehicle.charging.commands.commands["battery-preconditioning"].value = value
+    assert rig.api.calls == [(method, ("vid-1",))]
+
+
+def test_ac_current_limit_is_not_settable_by_default(readonly):
+    current = readonly.vehicle.charging.settings.maximum_current
+    assert not current._is_changeable
+    with pytest.raises(TypeError):
+        current.value = 32
+    assert readonly.api.calls == []
+
+
+def test_ac_current_limit_sets_through_the_library(rig):
+    current = rig.vehicle.charging.settings.maximum_current
+    assert current._is_changeable and (current.minimum, current.maximum, current.precision) == (8.0, 80.0, 1.0)
+    current.value = 32
+    assert rig.api.calls == [("set_ac_current_limit", ("vid-1", 32))]
+
+
+@pytest.mark.parametrize("bad", [7, 81, 0, -16, 16.5, "abc", True, float("nan"), None])
+def test_ac_current_limit_rejects_bad_values(rig, bad):
+    assert rig.vehicle.charging.settings.maximum_current._is_changeable, "refused by the connector, not by a read-only attribute"
+    with pytest.raises((SetterError, ValueError, TypeError)):
+        rig.vehicle.charging.settings.maximum_current.value = bad
+    assert rig.api.calls == []
+
+
+def test_no_charge_port_command(rig):
+    """An Air's charge port door is opened by hand; the API's call for a powered one is not offered."""
+    assert "charge-port" not in rig.vehicle.doors.commands.commands

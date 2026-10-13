@@ -10,7 +10,9 @@ nothing in vampire drain.
 
 Read-only unless the config says `"commands": true`. Then, and only then, each
 vehicle gets CarConnectivity commands (charging, charge limit, climatization,
-defrost, locks, trunk and frunk, lights and horn, wake) as set-hooks that run on
+defrost, locks, trunk and frunk, lights and horn, wake; from 0.3.0 Sentry and the
+alarm, windows, headlights, seat and steering wheel heat, Max A/C,
+creature comfort, battery preconditioning, AC current limit) as set-hooks that run on
 the caller's thread through the poller's own session. They are the only thing
 that ever wakes the car, and they do it explicitly (LucidSession.command).
 """
@@ -42,11 +44,12 @@ from carconnectivity.vehicle import GenericVehicle
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession, translate_api_error
-from carconnectivity_connectors.lucid.vehicle import LucidElectricVehicle, LucidVehicle, OpenCloseCommand
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, OpenCloseCommand, \
+    LevelCommand, SeatClimateCommand, WindowsCommand
 from carconnectivity_connectors.lucid._version import __version__
 
 if TYPE_CHECKING:
-    from typing import Any, Awaitable, Callable, Dict, Optional, Union
+    from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Union
     from carconnectivity.carconnectivity import CarConnectivity
 
 LOG: logging.Logger = logging.getLogger("carconnectivity.connectors.lucid")
@@ -57,6 +60,10 @@ _f = mapping._f  # pylint: disable=protected-access
 
 # The charge limit the Lucid app offers, whole percent.
 CHARGE_LIMIT_MIN, CHARGE_LIMIT_MAX = 50, 100
+# The AC charging current limit, whole amps. 8 A is the floor other Lucid clients already
+# send; the 6 A an EVSE may signal is untried against the car, so it is not offered. 80 A
+# is the Air's 19.2 kW onboard charger at 240 V.
+AC_CURRENT_MIN, AC_CURRENT_MAX = 8, 80
 # Plausible cabin set-points in Celsius: a guard against a unit mix-up (68 sent as C),
 # not a claim about what the car accepts.
 CABIN_TEMP_MIN_C, CABIN_TEMP_MAX_C = 10.0, 35.0
@@ -129,7 +136,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             raise ValueError('commands must be true or false')
         self.active_config['commands'] = commands
         if commands:
-            LOG.warning('Commands are enabled: this connector can lock, unlock, open and wake the car')
+            LOG.warning('Commands are enabled: this connector can lock, unlock, open, disarm and wake the car')
 
         self._session = LucidSession(Path(self.active_config['refresh_token_file']).expanduser())
 
@@ -262,7 +269,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
 
     # -- commands --------------------------------------------------------------
     def _add_commands(self, vehicle: GenericVehicle) -> None:
-        """Give the vehicle its commands and a settable charge limit; safe to call every poll.
+        """Give the vehicle its commands, a settable charge limit and AC current limit; safe to call every poll.
         Only called when the config enables commands."""
         if not isinstance(vehicle, LucidElectricVehicle):
             return
@@ -271,14 +278,55 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.climatization.commands, ClimatizationStartStopCommand, 'start-stop', self._on_climatization_start_stop),
             (vehicle.window_heatings.commands, WindowHeatingStartStopCommand, 'start-stop', self._on_defrost),
             (vehicle.doors.commands, LockUnlockCommand, 'lock-unlock', self._on_lock_unlock),
-            (vehicle.doors.commands, lambda parent: OpenCloseCommand(name='trunk', parent=parent), 'trunk', self._on_trunk),
-            (vehicle.doors.commands, lambda parent: OpenCloseCommand(name='frunk', parent=parent), 'frunk', self._on_frunk),
+            (vehicle.doors.commands, OpenCloseCommand, 'trunk', self._on_trunk),
+            (vehicle.doors.commands, OpenCloseCommand, 'frunk', self._on_frunk),
             (vehicle.commands, HonkAndFlashCommand, 'honk-flash', self._on_honk_flash),
             (vehicle.commands, WakeSleepCommand, 'wake-sleep', self._on_wake_sleep),
+            # 0.3.0: Halo Secure.
+            (vehicle.commands, OnOffCommand, 'sentry', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on sentry', lambda api, v: api.sentry_mode_on(v)),
+                OnOffCommand.Command.OFF: ('turn off sentry', lambda api, v: api.sentry_mode_off(v))})),
+            (vehicle.commands, OnOffCommand, 'enhanced-deterrence', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on enhanced deterrence', lambda api, v: api.enhanced_deterrence_on(v)),
+                OnOffCommand.Command.OFF: ('turn off enhanced deterrence', lambda api, v: api.enhanced_deterrence_off(v))})),
+            (vehicle.commands, OnOffCommand, 'sentry-at-home', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on sentry at home', lambda api, v: api.sentry_mode_at_home_on(v)),
+                OnOffCommand.Command.OFF: ('turn off sentry at home', lambda api, v: api.sentry_mode_at_home_off(v))})),
+            (vehicle.commands, OnOffCommand, 'sentry-at-work', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on sentry at work', lambda api, v: api.sentry_mode_at_work_on(v)),
+                OnOffCommand.Command.OFF: ('turn off sentry at work', lambda api, v: api.sentry_mode_at_work_off(v))})),
+            # An alarm cannot be set off remotely, only silenced.
+            (vehicle.commands, OnOffCommand, 'sentry-alarm', self._choice_hook({
+                OnOffCommand.Command.OFF: ('silence the sentry alarm', lambda api, v: api.turn_off_sentry_alarm(v))})),
+            (vehicle.commands, AlarmCommand, 'alarm', self._choice_hook({
+                choice: (f'set the alarm {choice}', lambda api, v, mode=mode: api.alarm_control(v, mode))
+                for choice, mode in ((AlarmCommand.Command.OFF, 1), (AlarmCommand.Command.ON, 2), (AlarmCommand.Command.SILENT, 3))})),
+            # Windows, headlights.
+            (vehicle.commands, WindowsCommand, 'windows', self._choice_hook({
+                WindowsCommand.Command.VENT: ('vent windows', lambda api, v: api.open_all_windows(v)),
+                WindowsCommand.Command.CLOSE: ('close windows', lambda api, v: api.close_all_windows(v))})),
+            (vehicle.commands, OnOffCommand, 'lights', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on headlights', lambda api, v: api.lights_on(v)),
+                OnOffCommand.Command.OFF: ('turn off headlights', lambda api, v: api.lights_off(v))})),
+            # Climate beyond the cabin temperature.
+            (vehicle.climatization.commands, OnOffCommand, 'max-ac', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on max a/c', lambda api, v: api.max_ac_on(v)),
+                OnOffCommand.Command.OFF: ('turn off max a/c', lambda api, v: api.max_ac_off(v))})),
+            (vehicle.climatization.commands, OnOffCommand, 'creature-comfort', self._choice_hook({
+                choice: (f'turn {choice} creature comfort', lambda api, v, mode=mode: api.creature_comfort_control(v, mode))
+                for choice, mode in ((OnOffCommand.Command.ON, mapping.CREATURE_COMFORT_MODE[True]),
+                                     (OnOffCommand.Command.OFF, mapping.CREATURE_COMFORT_MODE[False]))})),
+            (vehicle.climatization.commands, LevelCommand, 'steering-wheel-heater', self._choice_hook({
+                choice: (f'set steering wheel heater {choice}', lambda api, v, level=level: api.steering_wheel_heater_control(v, level))
+                for choice, level in mapping.STEERING_LEVEL.items()})),
+            (vehicle.climatization.commands, SeatClimateCommand, 'seat-climate', self._on_seat_climate),
+            (vehicle.charging.commands, OnOffCommand, 'battery-preconditioning', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on battery preconditioning', lambda api, v: api.battery_precon_on(v)),
+                OnOffCommand.Command.OFF: ('turn off battery preconditioning', lambda api, v: api.battery_precon_off(v))})),
         )
-        for commands, make, name, hook in wanted:
+        for commands, kind, name, hook in wanted:
             if not commands.contains_command(name):
-                command = make(parent=commands)
+                command = kind(name=name, parent=commands)
                 command._add_on_set_hook(hook)
                 command.enabled = True
                 commands.add_command(command)
@@ -287,6 +335,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             target.minimum, target.maximum, target.precision = float(CHARGE_LIMIT_MIN), float(CHARGE_LIMIT_MAX), 1.0
             target._add_on_set_hook(self._on_target_level)
             target._is_changeable = True
+        current = vehicle.charging.settings.maximum_current
+        if not current._is_changeable:
+            current.minimum, current.maximum, current.precision = float(AC_CURRENT_MIN), float(AC_CURRENT_MAX), 1.0
+            current._add_on_set_hook(self._on_maximum_current)
+            current._is_changeable = True
 
     @staticmethod
     def _vehicle_of(obj: Any) -> LucidElectricVehicle:
@@ -327,6 +380,23 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if not isinstance(command_arguments, dict) or not isinstance(command_arguments.get('command'), enum):
             raise CommandError(f'Command arguments are not as expected: {command_arguments}')
         return command_arguments['command']
+
+    def _choice_hook(self, actions: Dict[Any, Tuple[str, Callable[[Any, Any], Awaitable[None]]]]) \
+            -> Callable[[Any, Union[str, Dict[str, Any]]], Union[str, Dict[str, Any]]]:
+        """A set-hook for one of the connector's own choice commands: each choice it takes
+        is a (what, action) pair sent like any other command; a choice not in the table,
+        the "on" of an alarm that can only be silenced, is refused before anything is sent."""
+        enum = type(next(iter(actions)))
+
+        def hook(command: Any, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+            vehicle = self._vehicle_of(command)
+            choice = self._command_name(command_arguments, enum)
+            if choice not in actions:
+                raise CommandError(f'{command.name} takes only {", ".join(str(c) for c in actions)}')
+            what, action = actions[choice]
+            self._send(vehicle, what, action)
+            return command_arguments
+        return hook
 
     def _on_charging_start_stop(self, command: ChargingStartStopCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
         vehicle = self._vehicle_of(command)
@@ -416,6 +486,19 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._send(vehicle, 'wake', lambda api, v: api.wakeup_vehicle(v), wake=False)
         return command_arguments
 
+    def _on_seat_climate(self, command: SeatClimateCommand, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
+        vehicle = self._vehicle_of(command)
+        if not isinstance(command_arguments, dict):
+            raise CommandError(f'Command arguments are not as expected: {command_arguments}')
+        seat, mode, level = command_arguments.get('seat'), command_arguments.get('mode'), command_arguments.get('level')
+        zones = mapping.SEAT_ZONES.get((seat, mode))
+        if zones is None or level not in mapping.SEAT_MODE:
+            raise CommandError(f'Command arguments are not as expected: {command_arguments}')
+        car_mode = mapping.SEAT_MODE[level]
+        self._send(vehicle, f'set {seat} seat {mode} {level}',
+                   lambda api, v: api.seat_climate_control(v, **{zone: car_mode for zone in zones}))
+        return command_arguments
+
     def _on_target_level(self, attribute: GenericAttribute, value: Any) -> Any:
         try:
             vehicle = self._vehicle_of(attribute)
@@ -425,6 +508,17 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 or float(value) != int(value):
             raise SetterError(f'Charge limit must be a whole percent from {CHARGE_LIMIT_MIN} to {CHARGE_LIMIT_MAX}, not {value!r}')
         self._send(vehicle, f'set charge limit to {int(value)}%', lambda api, v: api.set_charge_limit(v, int(value)), error=SetterError)
+        return value
+
+    def _on_maximum_current(self, attribute: GenericAttribute, value: Any) -> Any:
+        try:
+            vehicle = self._vehicle_of(attribute)
+        except CommandError as err:
+            raise SetterError(str(err)) from err
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not AC_CURRENT_MIN <= value <= AC_CURRENT_MAX \
+                or float(value) != int(value):
+            raise SetterError(f'AC current limit must be whole amps from {AC_CURRENT_MIN} to {AC_CURRENT_MAX}, not {value!r}')
+        self._send(vehicle, f'set AC current limit to {int(value)} A', lambda api, v: api.set_ac_current_limit(v, int(value)), error=SetterError)
         return value
 
     # -- mapping ---------------------------------------------------------------
@@ -444,6 +538,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._apply_cabin(vehicle, st, measured)
         self._apply_tires(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
+        self._apply_controls(vehicle, st, measured)
 
     @staticmethod
     def _apply_identity(sv: LucidVehicle, cfg: Any, st: Any, measured: datetime) -> None:
@@ -510,6 +605,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # a cable. A plug-in reminder downstream waits on exactly this attribute.
         sv.charging.connector.connection_state._set_value(mapping.connector_connection_state(cs), measured=measured)
         sv.charging.connector.external_power._set_value(mapping.external_power(cs), measured=measured)
+        # The AC current limit as set, which the car keeps between sessions; the active
+        # session's own limit can be lower, held down by the charger. 0 is the car not saying.
+        ac_limit = _f(_dig(ch, "energy_ac_current_limit"))
+        sv.charging.settings.maximum_current._set_value(ac_limit if ac_limit else None, measured=measured)
 
     @staticmethod
     def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -615,6 +714,24 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         target = _f(_dig(st, "hvac", "front_left_set_temperature"))
         if target is not None:
             sv.climatization.settings.target_temperature._set_value(target, measured=measured, unit=Temperature.C)
+
+    @staticmethod
+    def _apply_controls(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """The state behind the 0.3.0 commands, each where a UI would look for its toggle."""
+        # EnhancedDeterrenceState shares SentryEnablementState's numbers: 1 enabled, 2 disabled, 3 idle.
+        sv.enhanced_deterrence._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enhanced_deterrence_state")), measured=measured)
+        sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
+        sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
+        sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
+                                              measured=measured)
+        hvac = _dig(st, "hvac")
+        sv.max_ac._set_value(mapping.two_state(_dig(hvac, "max_ac_status"), mapping.MAX_AC_ON, mapping.MAX_AC_OFF), measured=measured)
+        sv.creature_comfort._set_value(mapping.two_state(_dig(hvac, "keep_climate_status"), mapping.CREATURE_COMFORT_ON, mapping.CREATURE_COMFORT_OFF),
+                                       measured=measured)
+        sv.steering_wheel_heater._set_value(mapping.steering_wheel_level(_dig(hvac, "steering_heater_level"), _dig(hvac, "steering_heater")), measured=measured)
+        for (seat, mode), zones in mapping.SEAT_ZONES.items():
+            level = mapping.seat_level(_dig(hvac, "seats", zone) for zone in zones)
+            sv.seat_climate[mapping.seat_attribute(seat, mode)]._set_value(level, measured=measured)
 
     # -- identity --------------------------------------------------------------
     def get_version(self) -> str:

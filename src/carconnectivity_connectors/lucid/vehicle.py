@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from enum import Enum
 
-from carconnectivity.attributes import BooleanAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
+from carconnectivity.attributes import BooleanAttribute, EnumAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
 from carconnectivity.commands import GenericCommand
 from carconnectivity.errors import SetterError
 from carconnectivity.units import Speed, Temperature
@@ -65,6 +65,23 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.battery_energy_kwh: FloatAttribute = FloatAttribute(name="battery_energy_kwh", parent=self, precision=0.01, minimum=0.0, tags={'connector_custom'})
         self.battery_health_warning: BooleanAttribute = BooleanAttribute(name="battery_health_warning", parent=self, tags={'connector_custom'})
         self.software_update_available: BooleanAttribute = BooleanAttribute(name="software_update_available", parent=self, tags={'connector_custom'})
+        # The state behind the 0.3.0 commands, so a UI can show each one as a toggle.
+        # Enhanced deterrence reads like `sentry`: enabled or idle is on. The alarm mode
+        # is in the words the alarm command takes.
+        self.enhanced_deterrence: BooleanAttribute = BooleanAttribute(name="enhanced_deterrence", parent=self, tags={'connector_custom'})
+        self.alarm: EnumAttribute[AlarmCommand.Command] = EnumAttribute(name="alarm", parent=self, value_type=AlarmCommand.Command,
+                                                                        tags={'connector_custom'})
+        self.battery_preconditioning: BooleanAttribute = BooleanAttribute(name="battery_preconditioning", parent=self, tags={'connector_custom'})
+        self.max_ac: BooleanAttribute = BooleanAttribute(name="max_ac", parent=self, tags={'connector_custom'})
+        self.creature_comfort: BooleanAttribute = BooleanAttribute(name="creature_comfort", parent=self, tags={'connector_custom'})
+        self.steering_wheel_heater: EnumAttribute[ClimateLevel] = EnumAttribute(name="steering_wheel_heater", parent=self, value_type=ClimateLevel,
+                                                                                tags={'connector_custom'})
+        # One level per seat and mode, named as mapping.seat_attribute names them: the
+        # front seats heat and ventilate, the rear ones heat.
+        self.seat_climate: Dict[str, EnumAttribute[ClimateLevel]] = {
+            name: EnumAttribute(name=name, parent=self, value_type=ClimateLevel, tags={'connector_custom'})
+            for name in ("seat_heat_driver", "seat_vent_driver", "seat_heat_front_passenger", "seat_vent_front_passenger",
+                         "seat_heat_rear_left", "seat_heat_rear_center", "seat_heat_rear_right")}
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):
@@ -77,10 +94,25 @@ class LucidElectricVehicle(ElectricVehicle, LucidVehicle):
             super().__init__(vin=vin, garage=garage, managing_connector=managing_connector, initialization=initialization)
 
 
-class OpenCloseCommand(GenericCommand):
-    """Open or close one closure, the trunk or the frunk. CarConnectivity has no standard
-    command for these, so this one is the connector's own. Takes "open" / "close", the
-    enum, or {"command": "open"}, like the standard commands do."""
+class ClimateLevel(Enum):
+    """A seat or steering-wheel heater level, and a seat's ventilation level: the four
+    the Lucid app offers. The car's own numbers differ per heater; the connector maps them."""
+    OFF = 'off'
+    LOW = 'low'
+    MEDIUM = 'medium'
+    HIGH = 'high'
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class ChoiceCommand(GenericCommand):
+    """A command of the connector's own that takes one word from a fixed set, its
+    `Command` enum: the word, the enum member, or {"command": word}, like the standard
+    commands. Anything else is a SetterError before the hook, so before the car, sees it.
+    CarConnectivity has no standard command for these, hence the connector's own."""
+    Command: type[Enum]
+
     def __init__(self, name: str, parent: Optional[GenericObject] = None, initialization: Optional[Dict] = None) -> None:
         super().__init__(name=name, parent=parent, initialization=initialization)
 
@@ -95,18 +127,116 @@ class OpenCloseCommand(GenericCommand):
         if isinstance(raw, str):
             raw = raw.strip()
         try:
-            command = OpenCloseCommand.Command(raw)
+            command = self.Command(raw)
         except ValueError as err:
-            raise SetterError(f'Invalid value for {self.name}: {raw!r}; use one of {[str(c) for c in OpenCloseCommand.Command]}') from err
+            raise SetterError(f'Invalid value for {self.name}: {raw!r}; use one of {[str(c) for c in self.Command]}') from err
         if not self._is_changeable:
             raise TypeError('You cannot use this command. Command is not implemented.')
         new_value = self._execute_on_set_hook({'command': command}, early_hook=False)
         self._set_value(new_value)
 
+
+class OpenCloseCommand(ChoiceCommand):
+    """Open or close one closure: the trunk or the frunk."""
     class Command(Enum):
         """Open or close."""
         OPEN = 'open'
         CLOSE = 'close'
+
+        def __str__(self) -> str:
+            return self.value
+
+
+class OnOffCommand(ChoiceCommand):
+    """Turn one feature on or off: Sentry, Max A/C, the headlights and the rest."""
+    class Command(Enum):
+        """On or off."""
+        ON = 'on'
+        OFF = 'off'
+
+        def __str__(self) -> str:
+            return self.value
+
+
+class WindowsCommand(ChoiceCommand):
+    """All four windows at once. The car offers "vent", which drops them a little (a
+    second vent drops them further), not a full open, so that is the word here."""
+    class Command(Enum):
+        """Vent or close."""
+        VENT = 'vent'
+        CLOSE = 'close'
+
+        def __str__(self) -> str:
+            return self.value
+
+
+class AlarmCommand(ChoiceCommand):
+    """The security alarm: on, off, or silent (the app's "push notifications only")."""
+    class Command(Enum):
+        """Off, on or silent."""
+        OFF = 'off'
+        ON = 'on'
+        SILENT = 'silent'
+
+        def __str__(self) -> str:
+            return self.value
+
+
+class LevelCommand(ChoiceCommand):
+    """One heater's level: off, low, medium, high. The steering wheel's."""
+    Command = ClimateLevel
+
+
+class SeatClimateCommand(GenericCommand):
+    """One seat's heating or ventilation: "driver heat high", "front-passenger vent low",
+    or {"seat": ..., "mode": ..., "level": ...}. The rear seats heat and do not ventilate,
+    so a rear vent is refused here rather than sent."""
+    def __init__(self, name: str, parent: Optional[GenericObject] = None, initialization: Optional[Dict] = None) -> None:
+        super().__init__(name=name, parent=parent, initialization=initialization)
+
+    @property
+    def value(self) -> Optional[Union[str, Dict]]:
+        return super().value
+
+    @value.setter
+    def value(self, new_value: Optional[Union[str, Dict]]) -> None:
+        new_value = self._execute_on_set_hook(new_value, early_hook=True)
+        if isinstance(new_value, str):
+            words = new_value.split()
+        elif isinstance(new_value, dict):
+            words = [new_value.get('seat'), new_value.get('mode'), new_value.get('level')]
+        else:
+            words = []
+        usage = (f'use "<seat> <mode> <level>", seat one of {[str(s) for s in SeatClimateCommand.Seat]}, '
+                 f'mode heat or vent (front seats only), level one of {[str(c) for c in ClimateLevel]}')
+        if len(words) != 3:
+            raise SetterError(f'Invalid value for {self.name}: {new_value!r}; {usage}')
+        try:
+            seat, mode, level = SeatClimateCommand.Seat(words[0]), SeatClimateCommand.Mode(words[1]), ClimateLevel(words[2])
+        except ValueError as err:
+            raise SetterError(f'Invalid value for {self.name}: {new_value!r}; {usage}') from err
+        if mode is SeatClimateCommand.Mode.VENT and seat not in (SeatClimateCommand.Seat.DRIVER, SeatClimateCommand.Seat.FRONT_PASSENGER):
+            raise SetterError(f'Invalid value for {self.name}: the rear seats are heated, not ventilated; {usage}')
+        if not self._is_changeable:
+            raise TypeError('You cannot use this command. Command is not implemented.')
+        new_value = self._execute_on_set_hook({'seat': seat, 'mode': mode, 'level': level}, early_hook=False)
+        self._set_value(new_value)
+
+    class Seat(Enum):
+        """The five seats the car can heat."""
+        DRIVER = 'driver'
+        FRONT_PASSENGER = 'front-passenger'
+        REAR_LEFT = 'rear-left'
+        REAR_CENTER = 'rear-center'
+        REAR_RIGHT = 'rear-right'
+
+        def __str__(self) -> str:
+            return self.value
+
+    class Mode(Enum):
+        """Heat or ventilate."""
+        HEAT = 'heat'
+        VENT = 'vent'
 
         def __str__(self) -> str:
             return self.value
