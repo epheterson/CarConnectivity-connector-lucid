@@ -293,6 +293,22 @@ def test_climatization_converts_fahrenheit(rig):
     assert rig.api.calls == [("set_cabin_temperature", ("vid-1", 20.0))]
 
 
+@pytest.mark.parametrize("unit,temperature,celsius", [("°F", 68.0, 20.0), ("°C", 21.5, 21.5)])
+def test_climatization_takes_the_unit_as_a_string(rig, unit, temperature, celsius):
+    """Over MQTT or REST the unit arrives as JSON, so a string, not the enum."""
+    cmd = rig.vehicle.climatization.commands.commands["start-stop"]
+    cmd.value = {"command": "start", "target_temperature": temperature, "target_temperature_unit": unit}
+    assert rig.api.calls == [("set_cabin_temperature", ("vid-1", celsius))]
+
+
+@pytest.mark.parametrize("unit", ["F", "fahrenheit", 5, None])
+def test_climatization_refuses_a_unit_it_does_not_know(rig, unit):
+    cmd = rig.vehicle.climatization.commands.commands["start-stop"]
+    with pytest.raises(CommandError):
+        cmd.value = {"command": "start", "target_temperature": 21.0, "target_temperature_unit": unit}
+    assert rig.api.calls == []
+
+
 def test_climatization_rejects_an_absurd_temperature(rig):
     cmd = rig.vehicle.climatization.commands.commands["start-stop"]
     with pytest.raises(CommandError):

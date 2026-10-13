@@ -349,8 +349,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if temperature is None:
             raise CommandError('Starting climatization needs a target_temperature; the car has not reported one')
         try:
+            # Over MQTT or REST the unit is JSON, so the string '°F' rather than the enum.
             celsius = {Temperature.C: lambda t: t, Temperature.F: lambda t: (t - 32.0) * 5.0 / 9.0,
-                       Temperature.K: lambda t: t - 273.15}[unit](float(temperature))
+                       Temperature.K: lambda t: t - 273.15}[Temperature(unit)](float(temperature))
         except (KeyError, TypeError, ValueError) as err:
             raise CommandError(f'Unusable target temperature {temperature} {unit}') from err
         if not CABIN_TEMP_MIN_C <= celsius <= CABIN_TEMP_MAX_C:
