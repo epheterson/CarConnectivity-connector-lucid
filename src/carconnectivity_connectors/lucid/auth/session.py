@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -92,13 +93,19 @@ class LucidSession:
             self._loop.close()
             self._loop = None
 
-    def run(self, coro):
-        """Run a coroutine on this session's loop; callers on other threads wait their turn."""
-        with self._lock:
+    def run(self, coro, wait_s: Optional[float] = None):
+        """Run a coroutine on this session's loop; callers on other threads wait their turn,
+        for at most `wait_s` when given (TimeoutError past it, the coroutine never started)."""
+        if not self._lock.acquire(timeout=-1 if wait_s is None else max(wait_s, 0)):  # pylint: disable=consider-using-with  # released below
+            coro.close()
+            raise TimeoutError("the session stayed busy")
+        try:
             if self._loop is None:
                 coro.close()
                 raise RuntimeError("LucidSession.start() not called")
             return self._loop.run_until_complete(coro)
+        finally:
+            self._lock.release()
 
     # -- auth ----------------------------------------------------------------
     def _make_api(self):
@@ -155,10 +162,13 @@ class LucidSession:
         in CLOUD_2 or SLEEP_CHARGE does not take a command either. The command itself is sent
         once: nothing here retries it, because a retried unlock or trunk is a second
         unlock or trunk if the first one landed and only its answer was lost."""
+        # One deadline for the lot, from the call: the wait for a poll in flight, a login or
+        # refresh, the wake, the settle pause and the command.
+        deadline = time.monotonic() + self._command_timeout_s
+
         async def _go():
-            # One deadline for the lot: a login or refresh, the wake, the settle pause and the command.
             try:
-                async with asyncio.timeout(self._command_timeout_s):
+                async with asyncio.timeout(deadline - time.monotonic()):
                     api = await self._ensure()  # raises CarConnectivity errors already
                     try:
                         if wake_first:
@@ -170,4 +180,8 @@ class LucidSession:
                         raise translate_api_error(exc) from exc
             except TimeoutError as exc:
                 raise RetrievalError(f"no answer from Lucid within {self._command_timeout_s:.0f}s; check the car before trying again") from exc
-        self.run(_go())
+        try:
+            self.run(_go(), wait_s=deadline - time.monotonic())
+        except TimeoutError as exc:
+            # never sent: a poll held the session the whole time, so trying again is safe
+            raise RetrievalError(f"not sent: the connector stayed busy for {self._command_timeout_s:.0f}s; nothing reached the car") from exc

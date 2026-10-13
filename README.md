@@ -67,7 +67,7 @@ Off by default. Without the option the connector creates no command objects at a
 How they behave:
 
 - **Only commands wake the car.** If the last poll saw the car asleep (any sleep or cloud power state, the same rule the poller reports), the command wakes it first, waits a few seconds, then sends. Polling still never wakes it.
-- **Sent once.** Nothing is retried. A retried unlock or trunk is a second one if the first landed and only its answer was lost, so a failure comes back as an error and the decision is yours. A command not answered within 60 seconds, counting any login and wake it needed, is reported as such; check the car before sending it again.
+- **Sent once.** Nothing is retried. A retried unlock or trunk is a second one if the first landed and only its answer was lost, so a failure comes back as an error and the decision is yours. A command not answered within 60 seconds, counting any login and wake it needed, is reported as such; check the car before sending it again. One that waited out the 60 seconds behind a poll was never sent, and says so.
 - **Errors are short.** Rate limits, rejected sessions and refusals from the car all come back as a CarConnectivity `CommandError` naming the command and Lucid's reason.
 - **Same session, same rate limit.** Commands use the poller's login and count against the same per-account allowance. A successful one triggers an early poll so the model shows the result.
 - A climatization temperature in Fahrenheit is converted; anything outside 10 to 35 °C is refused as a probable unit mistake.

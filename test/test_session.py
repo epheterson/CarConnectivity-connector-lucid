@@ -130,3 +130,37 @@ def test_one_deadline_covers_wake_settle_and_command(token_file):
         s.command(SimpleNamespace(vehicle_id="vid-1"), _sent(calls), wake_first=True)
     assert calls == []
     s.close()
+
+
+def test_the_deadline_counts_the_wait_for_a_poll_in_flight(token_file):
+    """The deadline starts at the call, not once the session is free: a poll holding the
+    session past it is a command that never went, and is said to be."""
+    import threading
+    fake = FakeAPI(remaining_s=300)
+    s = LucidSession(token_file, api_factory=lambda: fake)
+    s._command_timeout_s = 0.2
+    s.start()
+    held, release = threading.Event(), threading.Event()
+
+    def poll():
+        with s._lock:
+            held.set()
+            release.wait(5)
+    t = threading.Thread(target=poll)
+    t.start()
+    held.wait(5)
+    calls = []
+    started = time.monotonic()
+    try:
+        with pytest.raises(RetrievalError, match="not sent"):
+            s.command(SimpleNamespace(vehicle_id="vid-1"), _sent(calls))
+        assert time.monotonic() - started < 1
+    finally:
+        release.set()
+        t.join()
+    assert calls == []
+    # what is left of the deadline after the wait is all the command gets
+    s._command_timeout_s = 5
+    s.command(SimpleNamespace(vehicle_id="vid-1"), _sent(calls))
+    assert calls == ["action"]
+    s.close()
