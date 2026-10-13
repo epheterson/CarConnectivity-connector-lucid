@@ -732,7 +732,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.max_ac._set_value(mapping.two_state(_dig(hvac, "max_ac_status"), mapping.MAX_AC_ON, mapping.MAX_AC_OFF), measured=measured)
         sv.creature_comfort._set_value(mapping.two_state(_dig(hvac, "keep_climate_status"), mapping.CREATURE_COMFORT_ON, mapping.CREATURE_COMFORT_OFF),
                                        measured=measured)
-        sv.steering_wheel_heater._set_value(mapping.steering_wheel_level(_dig(hvac, "steering_heater_level")), measured=measured)
+        sv.steering_wheel_heater._set_value(mapping.steering_wheel_level(_dig(hvac, "steering_heater_level"), _dig(hvac, "steering_heater")), measured=measured)
         for (seat, mode), zones in mapping.SEAT_ZONES.items():
             level = mapping.seat_level(_dig(hvac, "seats", zone) for zone in zones)
             sv.seat_climate[mapping.seat_attribute(seat, mode)]._set_value(level, measured=measured)

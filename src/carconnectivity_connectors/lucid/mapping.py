@@ -306,8 +306,11 @@ def seat_level(modes: Iterable[Optional[int]]) -> Optional[ClimateLevel]:
     return max(levels, key=order.index)
 
 
-def steering_wheel_level(level: Optional[int]) -> Optional[ClimateLevel]:
-    """The steering wheel heater's level; None when unknown."""
+def steering_wheel_level(level: Optional[int], status: Optional[int] = None) -> Optional[ClimateLevel]:
+    """The steering wheel heater's level; None when unknown. The level is a setting the car
+    keeps while the heater is off, so a status of off (SteeringHeaterStatus 1) reads off."""
+    if status == 1:
+        return ClimateLevel.OFF
     return _STEERING_CLIMATE_LEVEL.get(level) if level is not None else None
 
 

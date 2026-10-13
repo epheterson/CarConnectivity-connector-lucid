@@ -212,6 +212,13 @@ def test_climate_toggles_and_heater_levels_are_published(vehicle):
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
     assert vehicle.max_ac.value is False and vehicle.creature_comfort.value is False, "keep climate on is not pet mode"
     assert str(vehicle.steering_wheel_heater.value) == "off"
+    # the level is a setting the car keeps; the status says whether the wheel is warm
+    st.hvac.steering_heater_level, st.hvac.steering_heater = 4, 1
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert str(vehicle.steering_wheel_heater.value) == "off", "a kept level on a heater that is off"
+    st.hvac.steering_heater = 2
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert str(vehicle.steering_wheel_heater.value) == "high"
 
 
 def test_battery_preconditioning_and_the_ac_current_limit_are_published(vehicle):
