@@ -15,10 +15,11 @@ Read-only first. Their own Volvo connector shipped read-only; that is the preced
 | ✅ 5 | `connector.py` — `Connector(BaseConnector)`: config, background thread, `fetch_all` → `fetch_vehicles` → `update_vehicles`; error taxonomy; `get_type()` = `carconnectivity-connector-lucid` | the connector | integration run against the real car via `carconnectivity-cli` with the JSON in `test/integration_test/`; garage shows TARS with SoC/range/odometer/position/doors/charging populated |
 | ✅ 6 | `doc/Config.md`, README (config, the 5-minute-token note, the git-ref pin) | docs | a stranger can configure it from the README alone |
 | 7 | Vault: registry entry when it runs as a service; `home/vehicles.md` pointer | — | entry exists in the same commit that adds the service |
+| ✅ 8 | Commands behind `"commands": true` (0.2.0) | standard CarConnectivity commands + trunk/frunk | fakes: every command reaches the right library call once; disabled config exposes no command object; polls never wake |
 
 ## Not in scope (yet)
 
-Commands. Images. Trip/charge history (that is EVify's history engine, not a connector concern).
+Images. Trip/charge history (that is EVify's history engine, not a connector concern).
 
 ## Decisions
 

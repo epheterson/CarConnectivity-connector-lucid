@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 (2026-10-12)
+
+### Added
+- **Commands, off by default.** Set `"commands": true` in the connector config (a JSON boolean; anything else is refused at startup) and each vehicle gets CarConnectivity's standard commands: charging start-stop, a settable charge limit (50 to 100 %), climatization start-stop with a target temperature, defrost as window heating, lock-unlock, honk-flash and wake. Trunk and frunk get an open/close command of the connector's own, since the shared model has none. Without the option no command object exists and the charge limit stays read-only, so the default is exactly 0.1.8's read-only connector.
+- Commands run on the poller's session, serialised with it so nothing logs in twice. A car the last poll saw asleep is woken explicitly before the command; the library's `auto_wake` stays off and reads still never wake the car. Nothing is retried, each command has one 60 s deadline from the call, covering a wait behind a poll, any login, the wake and the command itself, and library errors come back as a short `CommandError`. A successful command asks for an early poll so the result shows up.
+
 ## 0.1.8 (2026-10-09)
 
 ### Changed
