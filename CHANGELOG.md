@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Charge port door** as `charge_port` (open, closed, ajar), from `body.charge_port`. Not one of `doors`: it stands open for every charge, so "doors open" would otherwise mean "charging". The command to open or close it stays out: an Air's door opens by hand.
+
 ## [0.3.0] - unreleased
 
 ### Added
