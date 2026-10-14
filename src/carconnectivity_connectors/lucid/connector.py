@@ -721,6 +721,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # EnhancedDeterrenceState shares SentryEnablementState's numbers: 1 enabled, 2 disabled, 3 idle.
         sv.enhanced_deterrence._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enhanced_deterrence_state")), measured=measured)
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
+        sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
         sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
                                               measured=measured)

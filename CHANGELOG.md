@@ -1,6 +1,11 @@
 # Changelog
 
-## [0.3.0] - unreleased
+## 0.3.1 (2026-10-14)
+
+### Added
+- **Charge port door** as `charge_port` (open, closed, ajar), from `body.charge_port`. Not one of `doors`: it stands open for every charge, so "doors open" would otherwise mean "charging". The command to open or close it stays out: an Air's door opens by hand.
+
+## 0.3.0 (2026-10-13)
 
 ### Added
 - **The rest of what the Lucid app can do, still behind `"commands": true`** and sent exactly as 0.2.0's commands are: once, no retry, the car woken first if the last poll saw it asleep, one 60 s deadline.
