@@ -31,6 +31,8 @@ WAKE_SETTLE_S = 8.0  # a car that was asleep needs a moment after WakeupVehicle 
 # The library sets no deadline on a command. Without one a call Lucid never answers holds
 # the session lock, and the poller with it, for good. It covers the whole command, login included.
 COMMAND_TIMEOUT_S = 60.0
+# Release notes are a nicety; the poll waits on them, so they get far less.
+RELEASE_NOTES_TIMEOUT_S = 15.0
 
 
 def load_refresh_token(path: Path) -> str:
@@ -151,6 +153,25 @@ class LucidSession:
                 return await api.fetch_vehicles()
             except Exception as exc:  # pylint: disable=broad-except
                 raise translate_api_error(exc) from exc
+        return self.run(_go())
+
+    def release_notes(self, lucid_vehicle: Any, version: str):
+        """The release notes document for one software version -- one gRPC call, which
+        reads Lucid's document store and never the car. It runs under the session lock like
+        everything else (the loop and the client belong to it), so it has a deadline of its
+        own: a reply that never comes must not hold up the poll and every command behind it."""
+        timeout_s = RELEASE_NOTES_TIMEOUT_S
+
+        async def _go():
+            try:
+                async with asyncio.timeout(timeout_s):
+                    api = await self._ensure()
+                    try:
+                        return await api.get_update_release_notes(version, lucid_vehicle)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        raise translate_api_error(exc) from exc
+            except TimeoutError as exc:
+                raise RetrievalError(f"no release notes from Lucid within {timeout_s:.0f}s") from exc
         return self.run(_go())
 
     def command(self, lucid_vehicle: Any, action: Callable[[Any, Any], Any], wake_first: bool = False) -> None:

@@ -4,7 +4,7 @@
 
 A [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity) connector for Lucid Motors vehicles (Air and Gravity), built on [python-lucidmotors](https://github.com/nshp/python-lucidmotors).
 
-**Read-only by default.** It polls the same mobile API the Lucid app uses and populates the CarConnectivity model: state, odometer, battery level / range / capacity / cell temperatures, charging state and target, position, doors and locks, climatization, software version. Reads never wake the car, so polling costs nothing in battery drain. Commands (lock, climate, charging, trunk and the rest from 0.2.0; Halo Secure, windows, seats and more from 0.3.0) but stay off unless the config turns them on; see [Commands](#commands).
+**Read-only by default.** It polls the same mobile API the Lucid app uses and populates the CarConnectivity model: state, odometer, battery level / range / capacity / cell temperatures, charging state, target and time to finish, position, doors and locks, windows, climatization, window heating, software version and the waiting update. It also reads what the car says about itself that the shared model has no slot for (see [What else it reads](#what-else-it-reads)). Reads never wake the car, so polling costs nothing in battery drain. Commands (lock, climate, charging, trunk and the rest from 0.2.0; Halo Secure, windows, seats and more from 0.3.0) but stay off unless the config turns them on; see [Commands](#commands).
 
 Verified against a 2026 Gravity on 2026-09-03.
 
@@ -93,10 +93,13 @@ Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "
 | Steering wheel heater | `steering_wheel_heater` | `hvac.steering_heater_level` |
 | Battery preconditioning | `battery_preconditioning` | `battery.preconditioning_status` |
 | AC current limit | `charging/settings/maximum_current` | `charging.energy_ac_current_limit` |
+| Defrost, rear window heat | `window_heating/heating_state`, `window_heating/windows/front`, `.../rear` | `hvac.defrost`, `hvac.rear_window_heating_status` (on if either is on, off only when both say off; the rear's "lost comm" states read unknown) |
 
 Sentry at home and at work have no state in the API that the connector can read, so they are commands only.
 
-Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (the library offers vent and close only), the sentry event and video history, which is a read API, not a command, and opening or closing the charge port door, which on an Air opens by hand (its state is read; see below).
+From 0.4.0 a command the car's own config says it is not fitted for is refused before anything is sent: seat heat or ventilation on seats without it (`config.front_seats_heating`, `front_seats_ventilation`, `second_row_heated_seats`, and no rear centre seat on a six-seat car), the steering wheel heater on a car without one (`config.heated_steering_wheel`), and a remote frunk close on a gas strut (`config.frunk_strut`). Only an explicit "not fitted" refuses; a car that does not say keeps every control.
+
+Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (four windows fully down from afar is a theft and rain risk, and vent airs the cabin), the Sentry event and video history (a read API with no place in the shared model, whose media links point at Lucid's cloud), and opening or closing the charge port door, which on an Air opens by hand (its state is read; see below).
 
 How they behave:
 
@@ -105,6 +108,30 @@ How they behave:
 - **Errors are short.** Rate limits, rejected sessions and refusals from the car all come back as a CarConnectivity `CommandError` naming the command and Lucid's reason.
 - **Same session, same rate limit.** Commands use the poller's login and count against the same per-account allowance. A successful one triggers an early poll so the model shows the result.
 - A climatization temperature in Fahrenheit is converted; anything outside 10 to 35 °C is refused as a probable unit mistake.
+
+## What else it reads
+
+From 0.4.0. The meanings come from the protobuf's field and enum names; one reading of a parked Gravity settled their zero and sentinel cases, and none has been seen while driving, charging or with an update waiting. Each one is unknown (`None`) when the car leaves the field out or sends 0 or a sentinel, never a guessed value.
+
+| attribute | from | values |
+|---|---|---|
+| `charging/estimated_date_reached` | `charging.session_minutes_remaining` | when the charge reaches its limit; only while charging |
+| `charging/connector/lock_state` | `charging.cable_lock` | locked, unlocked; only with a cable in |
+| `charge_session_energy` | `charging.charge_session_kwh` | kWh added this session by the car's meter; only while charging, and never 0 |
+| `alarm_status` | `alarm.status` | `disarmed`, `armed`, `pre-alarm`, `tilt`, `shock`, `intrusion`, `panic` |
+| `sentry_inactive_reason` | `sentry_state.sentry_active_state.inactive_reason_*` | `low-battery`, `updating`, `occupied`, `at-home`, `at-work`, `usb-full`, `usb-error`, `tow-mode`, `camera-error`, `unattended-occupant`, `creature-comfort`; the first the car gives, and only when it gives one. `is_active` is not read: an armed, idle Gravity reports it false with no reason |
+| `sentry_usb_drive_connected` | `sentry_state.usb_drive_status` | true, false; the car's "idle" reads unknown |
+| `living_object_detection` | `body.living_object_detection_status` | `disabled`, `not-active`, `level-1` to `level-3` |
+| `unattended_occupant_detection` | `body.unattended_occupant_detection_status` | `no-request`, `stage-1` to `stage-3`, `fault` |
+| `keyfob_battery_low` | `body.keyfob_battery_status` | true, false |
+| `battery_health_level` | `battery.battery_health_level` | the car's number as sent; probably a state of health in percent, but the proto does not say, so it is not named or scaled as one |
+| `software_update_version` | `software_update.version_available` | the waiting version, e.g. `3.1.2`; only while `update_available` says AVAILABLE, as are the install time and the notes |
+| `software_update_install_time` | `software_update.install_duration_minutes` | how long it takes to install |
+| `software_update_release_notes`, `software_update_release_notes_url` | `get_update_release_notes` | Lucid's notes for the waiting version and their link, fetched once per version (an hour later if the request fails), never per poll. Air only: the library can ask only for the Air's document, so a Gravity gets none rather than the wrong car's |
+
+Not published: `gps.elevation`, whose unit is unknown (a Gravity read 8932 where other cars at the same spot record 123 m; it will fill `position/altitude` once the unit is known), and `charging.charge_session_mi`, the range added this session, which may be miles as named or km as Lucid's other range figures are.
+
+`software_update_available` is true when the car announces an update and unknown otherwise: the proto has no value for "none waiting", so 0 no longer reads as false.
 
 ## Session lifetime — read this if you run it long
 

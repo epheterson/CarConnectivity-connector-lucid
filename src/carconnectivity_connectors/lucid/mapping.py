@@ -1,13 +1,16 @@
 """Lucid protobuf state -> CarConnectivity vocabulary. Pure functions, no I/O.
 
-Every conversion here is pinned by a test to a value observed on a real
-Gravity, because unit bugs in this layer are invisible until someone eyeballs
-a dashboard. Lucid reports km, km/h-looking-but-actually-m/s for speed
-(proto comment: "in meters/second"), Celsius and bar.
+Unit bugs in this layer are invisible until someone eyeballs a dashboard, so each
+conversion has a test. Up to 0.3.x they are pinned to values observed on a real
+Gravity. The 0.4.0 reads come from the proto's field and enum names: one read-only
+reading of a parked Gravity (2026-10-14) fixed their zero and sentinel cases, and
+nothing has checked them while driving or charging. Lucid reports km, km/h for speed
+(whatever the proto comment's "in meters/second" says; see speed_kmh), Celsius and bar.
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from datetime import datetime, timedelta
+from typing import Any, Iterable, Optional, Tuple
 
 from carconnectivity.charging import Charging, ChargingConnector
 from carconnectivity.doors import Doors
@@ -16,7 +19,8 @@ from carconnectivity.windows import Windows
 from carconnectivity.position import Position
 from carconnectivity.vehicle import GenericVehicle
 
-from carconnectivity_connectors.lucid.vehicle import AlarmCommand, ClimateLevel, SeatClimateCommand
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, AlarmStatus, ClimateLevel, LivingObjectDetection, SeatClimateCommand, \
+    SentryInactiveReason, UnattendedOccupantDetection
 
 # --- Lucid enum ints (proto/vehicle_state_service.proto) --------------------
 
@@ -208,6 +212,62 @@ def external_power(charge_state: Optional[int]) -> ChargingConnector.ExternalPow
     return ChargingConnector.ExternalPower.ACTIVE if charge_state in CHARGE_CHARGING else ChargingConnector.ExternalPower.AVAILABLE
 
 
+def nonzero(value: Any) -> Optional[float]:
+    """A number the car reports, or None for 0: proto3 sends 0 for a field it left out,
+    so on a reading that is never really zero, 0 is the car not saying."""
+    number = _f(value)
+    return number if number else None
+
+
+def charge_session_energy(charge_state: Optional[int], kwh: Any) -> Optional[float]:
+    """Energy (kWh) the car's own meter has added this session.
+
+    Only while it is charging with something on the meter. A parked Gravity, unplugged,
+    sends 0.0 (read 2026-10-14), and so does a car that leaves the field out, so 0 is never
+    a reading here, and nor is anything outside a charge. charge_session_mi is not read:
+    whether it is miles, as named, or km, as Lucid's other range figures are, is unverified."""
+    if charge_state not in CHARGE_CHARGING:
+        return None
+    return nonzero(kwh)
+
+
+# A minutes count of 65535 (0xFFFF) is "no estimate": a parked, unplugged Gravity sends
+# session_minutes_remaining = 65535 (read 2026-10-14). Anything at or above it is the
+# same sentinel or garbage.
+NO_ESTIMATE_MINUTES = 65535
+# Longer than any charge to a limit, even 120 V into a Gravity.
+MAX_CHARGE_MINUTES = 7 * 24 * 60
+
+
+def minutes_count(value: Any) -> Optional[float]:
+    """A minutes field as a count, or None for 0 (not said), a negative, or the 65535 sentinel."""
+    count = nonzero(value)
+    if count is None or count < 0 or count >= NO_ESTIMATE_MINUTES:
+        return None
+    return count
+
+
+def charge_finish(measured: datetime, charge_state: Optional[int], minutes: Any) -> Optional[datetime]:
+    """When the charge reaches its limit: the car's minutes remaining from when it measured
+    them. None unless it is charging and the count is a real one under a week."""
+    left = minutes_count(minutes)
+    if charge_state not in CHARGE_CHARGING or left is None or left > MAX_CHARGE_MINUTES:
+        return None
+    return measured + timedelta(minutes=left)
+
+
+def cable_lock(state: Optional[int], charge_state: Optional[int]) -> Optional[ChargingConnector.ChargingConnectorLockState]:
+    """ChargingState.cable_lock, a LockState: whether the cable is latched in the port. None
+    unless a cable is in, since a latch with nothing in it is not a locked connector."""
+    if connector_connection_state(charge_state) is not ChargingConnector.ChargingConnectorConnectionState.CONNECTED:
+        return None
+    if state == LOCK_LOCKED:
+        return ChargingConnector.ChargingConnectorLockState.LOCKED
+    if state == LOCK_UNLOCKED:
+        return ChargingConnector.ChargingConnectorLockState.UNLOCKED
+    return ChargingConnector.ChargingConnectorLockState.UNKNOWN
+
+
 # SentryEnablementState: 0 UNKNOWN, 1 ENABLED, 2 DISABLED, 3 IDLE.
 SENTRY_ENABLED, SENTRY_DISABLED, SENTRY_IDLE = 1, 2, 3
 
@@ -235,6 +295,50 @@ def alarm_mode(mode: Optional[int]) -> Optional[AlarmCommand.Command]:
     return _ALARM_MODES.get(mode) if mode is not None else None
 
 
+# AlarmStatus: 0 UNKNOWN, 1 DISARMED, 2 ARMED, 3 PRE_ALARM, 4 TILT, 5 SHOCK, 6 INTRUSION, 7 PANIC_MODE.
+ALARM_STATUS = dict(enumerate(AlarmStatus, start=1))
+# SentryUsbDriveStatus: 0 UNKNOWN, 1 IDLE, 2 CONNECTED, 3 NOT_CONNECTED. What IDLE says about
+# a drive is unverified, so it reads as unknown.
+USB_CONNECTED, USB_NOT_CONNECTED = {2}, {3}
+# LivingObjectDetectionStatus: 0 UNKNOWN, 1 DISABLED, 2 NOT_ACTIVE, 3..5 LEVEL_1..3_WARNING.
+LIVING_OBJECT_DETECTION = dict(enumerate(LivingObjectDetection, start=1))
+# UnattendedOccupantDetectionStatus: 0 UNKNOWN, 1 NO_REQUEST, 2..4 STAGE_1..3, 5 FAULT.
+UNATTENDED_OCCUPANT_DETECTION = dict(enumerate(UnattendedOccupantDetection, start=1))
+# KeyfobBatteryStatus: 0 UNKNOWN, 1 LOW, 2 SUFFICIENT.
+KEYFOB_LOW, KEYFOB_OK = {1}, {2}
+
+# SentryActiveState's flags, in proto order, each with the reason it names.
+SENTRY_INACTIVE_REASONS = (
+    ("inactive_reason_low_soc", SentryInactiveReason.LOW_BATTERY),
+    ("inactive_reason_ota", SentryInactiveReason.UPDATING),
+    ("inactive_reason_veh_occupied", SentryInactiveReason.OCCUPIED),
+    ("inactive_reason_at_home", SentryInactiveReason.AT_HOME),
+    ("inactive_reason_at_work", SentryInactiveReason.AT_WORK),
+    ("inactive_reason_usb_full", SentryInactiveReason.USB_FULL),
+    ("inactive_reason_usb_error", SentryInactiveReason.USB_ERROR),
+    ("inactive_reason_tow_mode", SentryInactiveReason.TOW_MODE),
+    ("inactive_reason_camera_error", SentryInactiveReason.CAMERA_ERROR),
+    ("inactive_reason_uod", SentryInactiveReason.UNATTENDED_OCCUPANT),
+    ("inactive_reason_creature_cmft_mode", SentryInactiveReason.CREATURE_COMFORT),
+)
+
+
+def pick(table: dict, value: Optional[int]) -> Any:
+    """A Lucid enum int looked up in one of the tables above; None for 0 or anything unlisted."""
+    return table.get(value) if value is not None else None
+
+
+def sentry_inactive_reason(sentry_state: Any) -> Optional[SentryInactiveReason]:
+    """Why Sentry is not recording: the first inactive_reason_* flag the car sets, in proto
+    order; None when none is set. is_active itself is not read: a real Gravity, armed and
+    idle, sent is_active false with every reason false (2026-10-14), so false does not mean
+    "not recording", and an empty or absent block says nothing either."""
+    active = _dig(sentry_state, "sentry_active_state")
+    if active is None or getattr(active, "is_active", False):
+        return None
+    return next((why for flag, why in SENTRY_INACTIVE_REASONS if getattr(active, flag, False)), None)
+
+
 # chassis.headlights is typed LightAction: 0 UNKNOWN, 1 FLASH, 2 ON, 3 OFF, 4 HAZARD_ON,
 # 5 HAZARD_OFF. Only ON and OFF say whether the headlights are on.
 LIGHT_ON, LIGHT_OFF = 2, 3
@@ -256,6 +360,13 @@ def two_state(value: Optional[int], on: Iterable[int], off: Iterable[int]) -> Op
         return False
     return None
 
+
+# DefrostState: 0 UNKNOWN, 1 ON, 2 OFF. RearWindowHeatingStatus: 0 UNKNOWN, 1 OFF, 2 ON,
+# 3 OFF and 4 ON "lost comm with DCM": the car has lost touch with the module that reports
+# it, so those two are a stale reading and read unknown. The defrost command toggles the
+# first, so it is the front entry of window_heatings.
+DEFROST_ON, DEFROST_OFF = {1}, {2}
+REAR_WINDOW_HEAT_ON, REAR_WINDOW_HEAT_OFF = {2}, {1}
 
 # BatteryPreconStatus: 0 UNKNOWN, 1 OFF, 2 ON, 3 UNAVAILABLE (which is not on).
 PRECON_ON, PRECON_OFF = {2}, {1, 3}
@@ -289,6 +400,45 @@ SEAT_ZONES = {
     (_SEAT.REAR_CENTER, _HEAT): ("rear_passenger_heat_center",),
     (_SEAT.REAR_RIGHT, _HEAT): ("rear_passenger_heat_right",),
 }
+
+
+# VehicleConfig's capability flags. Each *Availability enum is 0 UNKNOWN, 1 UNAVAILABLE,
+# 2 AVAILABLE; only an explicit UNAVAILABLE refuses a command, so a car that does not
+# say keeps all of them, as before. RearSeatConfig 2 is six seats: two second-row
+# captain's chairs and no centre seat. StrutType 1 is a gas strut, which a remote
+# command cannot pull shut.
+FEATURE_UNAVAILABLE = 1
+REAR_SEATS_SIX = 2
+STRUT_GAS = 1
+
+
+def seat_refusal(config: Any, seat: SeatClimateCommand.Seat, mode: SeatClimateCommand.Mode) -> Optional[str]:
+    """Why this car cannot heat or ventilate this seat, by its own config; None when it can
+    or has not said."""
+    front = seat in (_SEAT.DRIVER, _SEAT.FRONT_PASSENGER)
+    if front and mode is _VENT and _dig(config, "front_seats_ventilation") == FEATURE_UNAVAILABLE:
+        return "this car's front seats are not ventilated"
+    if front and mode is _HEAT and _dig(config, "front_seats_heating") == FEATURE_UNAVAILABLE:
+        return "this car's front seats are not heated"
+    if not front and _dig(config, "second_row_heated_seats") == FEATURE_UNAVAILABLE:
+        return "this car's rear seats are not heated"
+    if seat is _SEAT.REAR_CENTER and _dig(config, "rear_seat_config") == REAR_SEATS_SIX:
+        return "this car has no rear centre seat"
+    return None
+
+
+def steering_heater_refusal(config: Any) -> Optional[str]:
+    """Why this car cannot heat its steering wheel; None when it can or has not said."""
+    if _dig(config, "heated_steering_wheel") == FEATURE_UNAVAILABLE:
+        return "this car's steering wheel is not heated"
+    return None
+
+
+def frunk_close_refusal(config: Any) -> Optional[str]:
+    """Why the frunk cannot be closed remotely: a gas strut closes by hand."""
+    if _dig(config, "frunk_strut") == STRUT_GAS:
+        return "this car's frunk has a gas strut and closes by hand"
+    return None
 
 
 def seat_attribute(seat: SeatClimateCommand.Seat, mode: SeatClimateCommand.Mode) -> str:
@@ -360,6 +510,54 @@ def warning_flag(state: Optional[int]) -> Optional[bool]:
     return None
 
 
+# UpdateAvailability: 0 UNKNOWN, 1 UPDATE_AVAILABLE. There is no "no update" value, and
+# proto3 delivers 0 for a field the car left out, so 0 says nothing either way.
+UPDATE_AVAILABLE = 1
+
+
+def update_available(value: Optional[int]) -> Optional[bool]:
+    """True when the car says an update is waiting, None otherwise. Reading 0 as False
+    published "no update" for a car that had simply not said."""
+    return True if value == UPDATE_AVAILABLE else None
+
+
+def text(value: Any) -> Optional[str]:
+    """A proto string, or None for the empty string proto3 sends when it is left out."""
+    return (value.strip() or None) if isinstance(value, str) else None
+
+
+def waiting_update(software_update: Any) -> Optional[str]:
+    """The version waiting to install, only when the car also says an update is AVAILABLE:
+    whether version_available is cleared after an install, or names the version just
+    installed, is unverified, so on its own it is not "waiting"."""
+    if not update_available(_dig(software_update, "update_available")):
+        return None
+    return text(_dig(software_update, "version_available"))
+
+
+def install_time(minutes: Any) -> Optional[timedelta]:
+    """SoftwareUpdate.install_duration_minutes; None for 0 (the car not saying) or the 65535 sentinel."""
+    left = minutes_count(minutes)
+    return timedelta(minutes=left) if left is not None else None
+
+
+# Model: 0 UNKNOWN, 1 AIR, 2 GRAVITY.
+MODEL_AIR = 1
+
+
+def release_notes_apply(model: Optional[int]) -> bool:
+    """Whether the library's release notes are this car's. get_update_release_notes asks
+    for DOCUMENT_TYPE_RELEASE_NOTES_POST, the Air's; a Gravity's are another document type
+    (GTY_RELEASE_NOTES_POST) the library cannot ask for, and an Air's notes on a Gravity
+    would describe the wrong car. So only a car that says it is an Air gets them."""
+    return model == MODEL_AIR
+
+
+def release_notes(document: Any) -> Tuple[Optional[str], Optional[str]]:
+    """(text, link) from a GetDocumentInfoResponse; either is None when the reply is empty."""
+    return text(_dig(document, "info", "description")), text(_dig(document, "url"))
+
+
 def hvac_active(power: Optional[int]) -> Optional[bool]:
     """None when unknown, else whether climate is doing anything."""
     if power is None or power == 0:
@@ -370,6 +568,12 @@ def hvac_active(power: Optional[int]) -> Optional[bool]:
 def position_type(power_state: Optional[int]) -> Position.PositionType:
     """Driving or parking, from power state."""
     return Position.PositionType.DRIVING if power_state == POWER_DRIVE else Position.PositionType.PARKING
+
+
+def has_fix(lat: Optional[float], lon: Optional[float]) -> bool:
+    """Whether a latitude and longitude are a position. A Gps block the car left out
+    arrives as proto3's 0.0, 0.0, a point in the Gulf of Guinea no car parks at."""
+    return lat is not None and lon is not None and (lat, lon) != (0.0, 0.0)
 
 
 def speed_kmh(speed: Optional[float]) -> Optional[float]:
