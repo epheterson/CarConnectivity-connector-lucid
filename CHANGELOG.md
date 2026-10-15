@@ -12,7 +12,7 @@
 - **Commands the car is not fitted for are refused before sending**, by the car's own config: seat heat or ventilation it lacks, the rear centre seat on a six-seat car, the steering wheel heater, and a remote frunk close on a gas strut. A car that does not say keeps every control.
 
 ### Not added
-- **Altitude.** `gps.elevation` waits on a known unit: a real Gravity sent 8932 at a spot where other cars record 123 m, which is not metres, feet, decimetres or centimetres. `position.altitude` stays empty until the unit is settled.
+- **Altitude.** `gps.elevation` waits on a known unit: a real Gravity sent 8932 at a spot where other cars record 123 m, which is not metres, feet, decimetres or centimetres. `position.altitude` stays empty until the unit is settled; the raw value is published as the unitless `gps_elevation_raw` so it can be calibrated against known heights.
 - **Range added this session.** `charging.charge_session_mi` waits on a known unit: it may be miles, as named, or km, as Lucid's other range figures are.
 
 ### Fixed

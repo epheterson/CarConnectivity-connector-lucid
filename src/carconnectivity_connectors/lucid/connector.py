@@ -671,12 +671,15 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         gps = _dig(st, "gps")
         lat, lon = _f(_dig(gps, "location", "latitude")), _f(_dig(gps, "location", "longitude"))
-        if not mapping.has_fix(lat, lon):
+        fix = mapping.has_fix(lat, lon)
+        # gps.elevation as the car sends it, not as position.altitude: a real Gravity sent
+        # 8932 where cars beside it record 123 m, so its unit is not metres, feet,
+        # decimetres or centimetres. Raw, it can be calibrated against known heights.
+        sv.gps_elevation_raw._set_value(mapping.nonzero(_dig(gps, "elevation")) if fix else None, measured=measured)
+        if not fix:
             return
         sv.position.latitude._set_value(lat, measured=measured)
         sv.position.longitude._set_value(lon, measured=measured)
-        # gps.elevation is not published: a real Gravity sent 8932 where cars beside it
-        # record 123 m, so its unit is not metres, feet, decimetres or centimetres.
         sv.position.heading._set_value(_f(_dig(gps, "heading_precise")), measured=measured)
         sv.position.position_type._set_value(mapping.position_type(_dig(st, "power")), measured=measured)
 

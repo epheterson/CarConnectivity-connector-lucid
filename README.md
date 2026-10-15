@@ -124,12 +124,15 @@ From 0.4.0. The meanings come from the protobuf's field and enum names; one read
 | `living_object_detection` | `body.living_object_detection_status` | `disabled`, `not-active`, `level-1` to `level-3` |
 | `unattended_occupant_detection` | `body.unattended_occupant_detection_status` | `no-request`, `stage-1` to `stage-3`, `fault` |
 | `keyfob_battery_low` | `body.keyfob_battery_status` | true, false |
+| `gps_elevation_raw` | `gps.elevation` | the car's number as sent, unit unknown; None without a fix or when 0 (see below) |
 | `battery_health_level` | `battery.battery_health_level` | the car's number as sent; probably a state of health in percent, but the proto does not say, so it is not named or scaled as one |
 | `software_update_version` | `software_update.version_available` | the waiting version, e.g. `3.1.2`; only while `update_available` says AVAILABLE, as are the install time and the notes |
 | `software_update_install_time` | `software_update.install_duration_minutes` | how long it takes to install |
 | `software_update_release_notes`, `software_update_release_notes_url` | `get_update_release_notes` | Lucid's notes for the waiting version and their link, fetched once per version (an hour later if the request fails), never per poll. Air only: the library can ask only for the Air's document, so a Gravity gets none rather than the wrong car's |
 
-Not published: `gps.elevation`, whose unit is unknown (a Gravity read 8932 where other cars at the same spot record 123 m; it will fill `position/altitude` once the unit is known), and `charging.charge_session_mi`, the range added this session, which may be miles as named or km as Lucid's other range figures are.
+`gps_elevation_raw` is `gps.elevation` exactly as the car sends it: a plain number with no unit, None without a GPS fix. Its unit is unknown (a Gravity read 8932 where other cars at the same spot record 123 m), so it does not fill `position/altitude`; it is exposed so the value can be calibrated against known heights, for example drives logged beside other cars' elevations.
+
+Not published: `charging.charge_session_mi`, the range added this session, which may be miles as named or km as Lucid's other range figures are.
 
 `software_update_available` is true when the car announces an update and unknown otherwise: the proto has no value for "none waiting", so 0 no longer reads as false.
 

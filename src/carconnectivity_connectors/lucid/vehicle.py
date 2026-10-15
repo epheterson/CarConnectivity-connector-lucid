@@ -104,6 +104,9 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.unattended_occupant_detection: EnumAttribute[UnattendedOccupantDetection] = EnumAttribute(
             name="unattended_occupant_detection", parent=self, value_type=UnattendedOccupantDetection, tags={'connector_custom'})
         self.keyfob_battery_low: BooleanAttribute = BooleanAttribute(name="keyfob_battery_low", parent=self, tags={'connector_custom'})
+        # Gps.elevation exactly as sent, with no unit: it is not metres, feet, decimetres or
+        # centimetres, so it is not position.altitude. Published for calibration.
+        self.gps_elevation_raw: FloatAttribute = FloatAttribute(name="gps_elevation_raw", parent=self, tags={'connector_custom'})
         # BatteryState.battery_health_level as the car sends it. Not named or scaled as a state
         # of health: the proto does not say what it measures, and no car has been read yet.
         # The update that is waiting: its version, how long it takes to install, and Lucid's

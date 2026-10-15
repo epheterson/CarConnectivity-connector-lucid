@@ -177,6 +177,24 @@ def test_elevation_is_not_published_while_its_unit_is_unknown(vehicle):
     assert vehicle.position.altitude.value is None
 
 
+def test_the_raw_elevation_is_published_as_sent_for_calibration(vehicle):
+    """The real reading's 8932, unitless and untouched, beside an empty position.altitude."""
+    Connector._apply_position(vehicle, gravity_reading().state, MEASURED)
+    assert vehicle.gps_elevation_raw.value == 8932.0
+    assert vehicle.gps_elevation_raw.unit is None
+    Connector._apply_position(vehicle, gps_state(elevation=-40), later(1))
+    assert vehicle.gps_elevation_raw.value == -40.0, "negative is a value, whatever the unit"
+
+
+@pytest.mark.parametrize("state", [pb.VehicleState(power=pb.POWER_STATE_DRIVE),
+                                   pb.VehicleState(gps=pb.Gps(location=pb.Location(latitude=0.0, longitude=0.0), elevation=8932)),
+                                   pb.VehicleState(gps=pb.Gps(location=pb.Location(latitude=39.7817, longitude=-89.6501)))])
+def test_no_gps_no_fix_or_no_elevation_publishes_no_raw_elevation(vehicle, state):
+    Connector._apply_position(vehicle, gravity_reading().state, MEASURED)
+    Connector._apply_position(vehicle, state, later(1))
+    assert vehicle.gps_elevation_raw.value is None, "0 is proto3's unset, and no fix means no elevation"
+
+
 def test_an_absent_gps_block_is_not_a_position_at_zero_zero(vehicle):
     """A real VehicleState without gps reads 0.0, 0.0, which used to be published."""
     Connector._apply_position(vehicle, pb.VehicleState(power=pb.POWER_STATE_DRIVE), MEASURED)
