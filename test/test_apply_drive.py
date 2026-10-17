@@ -119,6 +119,19 @@ def test_no_window_block_is_unknown_not_all_closed(vehicle):
     assert vehicle.windows.open_state.value is Windows.OpenState.UNKNOWN
 
 
+def test_a_window_that_cannot_say_keeps_the_summary_from_saying_closed(vehicle):
+    """A close with three windows mid-travel read back as closed: the driver's said
+    FULLY_CLOSED and the others UNKNOWN, and only open ones counted against closed."""
+    from carconnectivity.windows import Windows
+
+    wp = SimpleNamespace(left_front=1, left_rear=6, right_front=0, right_rear=6)
+    Connector._apply_windows(vehicle, SimpleNamespace(body=SimpleNamespace(window_position=wp)), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.open_state.value is Windows.OpenState.UNKNOWN
+    wp.right_rear = 5
+    Connector._apply_windows(vehicle, SimpleNamespace(body=SimpleNamespace(window_position=wp)), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.open_state.value is Windows.OpenState.OPEN, "one down is down, whatever the rest say"
+
+
 def test_plug_state_is_published_with_the_charge(vehicle):
     from carconnectivity.charging import ChargingConnector as C
 

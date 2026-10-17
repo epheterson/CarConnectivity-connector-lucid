@@ -719,9 +719,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     @staticmethod
     def _apply_windows(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         """Four windows, the same way the doors are done: only the ones that reported
-        are summarised, so an absent body block is "unknown" rather than "all closed"."""
+        are summarised, so an absent body block is "unknown" rather than "all closed". Any one
+        down is open; otherwise one that cannot say (mid-travel reads UNKNOWN) keeps it unknown."""
         positions = _dig(st, "body", "window_position")
-        any_open = False
+        any_open = any_unknown = False
         reported = False
         for window_id, field in mapping.WINDOWS.items():
             raw = _dig(positions, field)
@@ -735,9 +736,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             state = mapping.window_open_state(raw)
             window.open_state._set_value(state, measured=measured)
             any_open = any_open or state in (Windows.OpenState.OPEN, Windows.OpenState.AJAR)
+            any_unknown = any_unknown or state is Windows.OpenState.UNKNOWN
             reported = True
         if reported:
-            sv.windows.open_state._set_value(Windows.OpenState.OPEN if any_open else Windows.OpenState.CLOSED, measured=measured)
+            summary = Windows.OpenState.OPEN if any_open else Windows.OpenState.UNKNOWN if any_unknown else Windows.OpenState.CLOSED
+            sv.windows.open_state._set_value(summary, measured=measured)
         else:
             sv.windows.open_state._set_value(Windows.OpenState.UNKNOWN, measured=measured)
 
