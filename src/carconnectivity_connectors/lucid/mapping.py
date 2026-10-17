@@ -370,6 +370,16 @@ REAR_WINDOW_HEAT_ON, REAR_WINDOW_HEAT_OFF = {2}, {1}
 
 # BatteryPreconStatus: 0 UNKNOWN, 1 OFF, 2 ON, 3 UNAVAILABLE (which is not on).
 PRECON_ON, PRECON_OFF = {2}, {1, 3}
+# KeylessDrivingState: 1 on, 2 off. The same numbers go out in KeylessDrivingActionRequest.
+KEYLESS_ON, KEYLESS_OFF = {1}, {2}
+DRIVE_MODE_VALET = 4
+
+
+def valet(drive_mode: Optional[int]) -> Optional[bool]:
+    """Whether the car is in Valet mode, read off DriveMode; 0 is the car not saying."""
+    return None if not drive_mode else drive_mode == DRIVE_MODE_VALET
+
+
 # MaxACState: 0 UNKNOWN, 1 OFF, 2 ON.
 MAX_AC_ON, MAX_AC_OFF = {2}, {1}
 # KeepClimateStatus: 0 UNKNOWN, 1 INACTIVE, 2 ENABLED, 3 CANCELED, 4 PET_MODE_ON. Creature

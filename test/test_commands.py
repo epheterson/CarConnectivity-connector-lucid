@@ -531,6 +531,33 @@ def test_halo_secure(rig, name, value, method):
     assert rig.api.calls == [(method, ("vid-1",))]
 
 
+@pytest.mark.parametrize("value,action", [("on", 1), ("off", 2)])
+def test_keyless_driving_sends_the_request_the_library_has_no_call_for(rig, value, action):
+    pytest.importorskip("lucidmotors")
+    sent = []
+
+    async def keyless(request):
+        sent.append(request)
+        await rig.api._record("KeylessDrivingAction", request.vehicle_id, request.action)
+
+    rig.api._vehicle_service = SimpleNamespace(KeylessDrivingAction=keyless)
+    rig.vehicle.commands.commands["keyless-driving"].value = value
+    assert rig.api.calls == [("KeylessDrivingAction", ("vid-1", action))]
+    assert type(sent[0]).__name__ == "KeylessDrivingActionRequest"
+
+
+def test_keyless_driving_wakes_a_sleeping_car_first(rig):
+    pytest.importorskip("lucidmotors")
+
+    async def keyless(request):
+        await rig.api._record("KeylessDrivingAction", request.vehicle_id)
+
+    rig.api._vehicle_service = SimpleNamespace(KeylessDrivingAction=keyless)
+    _poll_sees(rig, 1)
+    rig.vehicle.commands.commands["keyless-driving"].value = "on"
+    assert rig.api.names() == ["wakeup_vehicle", "KeylessDrivingAction"]
+
+
 def test_a_sentry_alarm_can_only_be_silenced(rig):
     with pytest.raises(CommandError, match="off"):
         rig.vehicle.commands.commands["sentry-alarm"].value = "on"

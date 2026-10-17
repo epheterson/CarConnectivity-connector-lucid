@@ -197,6 +197,18 @@ def test_halo_secure_state_is_published(vehicle):
     assert vehicle.enhanced_deterrence.value is False and vehicle.alarm.value is None
 
 
+def test_keyless_driving_and_valet_are_published(vehicle):
+    st = SimpleNamespace(keyless_driving=1, drive_mode=4)
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.keyless_driving.value is True and vehicle.valet.value is True
+    st.keyless_driving, st.drive_mode = 2, 1
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.keyless_driving.value is False and vehicle.valet.value is False
+    st.keyless_driving, st.drive_mode = 0, 0
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.keyless_driving.value is None and vehicle.valet.value is None, "0 is the car not saying"
+
+
 def test_charge_port_door_and_headlights_are_published(vehicle):
     from carconnectivity.doors import Doors
     from carconnectivity.lights import Lights

@@ -75,6 +75,17 @@ RELEASE_NOTES_RETRY_S = 3600.0
 REFRESH_AFTER_COMMAND_S = 6.0
 
 
+async def _keyless_driving(api: Any, vehicle: Any, on: bool) -> None:
+    """KeylessDrivingAction, which the library has the request for but no call, sent the
+    way its own calls are; the connector has woken the car already, as for every command."""
+    from lucidmotors import _check_for_api_error  # pylint: disable=import-outside-toplevel
+    from lucidmotors.gen import vehicle_state_service_pb2  # pylint: disable=import-outside-toplevel
+
+    action = next(iter(mapping.KEYLESS_ON if on else mapping.KEYLESS_OFF))
+    request = vehicle_state_service_pb2.KeylessDrivingActionRequest(vehicle_id=vehicle.vehicle_id, action=action)  # pylint: disable=no-member
+    await _check_for_api_error(api._vehicle_service.KeylessDrivingAction(request))  # pylint: disable=protected-access
+
+
 class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     """Connector class for Lucid vehicles."""
 
@@ -337,6 +348,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.commands, AlarmCommand, 'alarm', self._choice_hook({
                 choice: (f'set the alarm {choice}', lambda api, v, mode=mode: api.alarm_control(v, mode))
                 for choice, mode in ((AlarmCommand.Command.OFF, 1), (AlarmCommand.Command.ON, 2), (AlarmCommand.Command.SILENT, 3))})),
+            # Keyless driving: drive with no key in the car, as the app's Keyless Drive does.
+            (vehicle.commands, OnOffCommand, 'keyless-driving', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on keyless driving', lambda api, v: _keyless_driving(api, v, True)),
+                OnOffCommand.Command.OFF: ('turn off keyless driving', lambda api, v: _keyless_driving(api, v, False))})),
             # Windows, headlights.
             (vehicle.commands, WindowsCommand, 'windows', self._choice_hook({
                 WindowsCommand.Command.VENT: ('vent windows', lambda api, v: api.open_all_windows(v)),
@@ -838,6 +853,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
         sv.alarm_status._set_value(mapping.pick(mapping.ALARM_STATUS, _dig(st, "alarm", "status")), measured=measured)
         sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
+        sv.keyless_driving._set_value(mapping.two_state(_dig(st, "keyless_driving"), mapping.KEYLESS_ON, mapping.KEYLESS_OFF), measured=measured)
+        sv.valet._set_value(mapping.valet(_dig(st, "drive_mode")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
         sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
                                               measured=measured)

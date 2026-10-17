@@ -78,6 +78,10 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.charge_port: EnumAttribute[Doors.OpenState] = EnumAttribute(name="charge_port", parent=self, value_type=Doors.OpenState,
                                                                          tags={'connector_custom'})
         self.battery_preconditioning: BooleanAttribute = BooleanAttribute(name="battery_preconditioning", parent=self, tags={'connector_custom'})
+        # Keyless driving: the car drives with no key present while it is on. Valet is
+        # read off the drive mode; nothing in the API sets it.
+        self.keyless_driving: BooleanAttribute = BooleanAttribute(name="keyless_driving", parent=self, tags={'connector_custom'})
+        self.valet: BooleanAttribute = BooleanAttribute(name="valet", parent=self, tags={'connector_custom'})
         self.max_ac: BooleanAttribute = BooleanAttribute(name="max_ac", parent=self, tags={'connector_custom'})
         self.creature_comfort: BooleanAttribute = BooleanAttribute(name="creature_comfort", parent=self, tags={'connector_custom'})
         self.steering_wheel_heater: EnumAttribute[ClimateLevel] = EnumAttribute(name="steering_wheel_heater", parent=self, value_type=ClimateLevel,
