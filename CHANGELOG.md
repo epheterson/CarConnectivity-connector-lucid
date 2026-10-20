@@ -9,6 +9,8 @@
   - Climate: defrost and the rear window heater fill the standard `window_heatings`, the state the defrost command had none of.
   - Battery: `battery_health_level`, the car's raw figure, published under the proto's name; it is probably a state of health, but nothing says so.
   - Software, only while the car's update flag says AVAILABLE: the waiting version as `software_update_version`, its install time as `software_update_install_time`, and Lucid's release notes for it as `software_update_release_notes` and `software_update_release_notes_url`. The notes are an Air's only: the library can ask only for the Air's document type, so a Gravity, or a car that does not say its model, gets none rather than another car's. They are requested once per waiting version and kept; a failed request is tried again an hour later, never on the next poll, and never fails the poll.
+- **Keyless driving**, behind `"commands": true`: a `keyless-driving` on/off command (the app's Keyless Drive: the car drives with no key in it while on), sent as the library's own calls are, since the library has the request but no call for it. The car's state reads as `keyless_driving`. Not yet sent to a car.
+- **Valet** as `valet`, read off the drive mode (unknown when the car does not say). Read only: nothing in the API sets it.
 - **Commands the car is not fitted for are refused before sending**, by the car's own config: seat heat or ventilation it lacks, the rear centre seat on a six-seat car, the steering wheel heater, and a remote frunk close on a gas strut. A car that does not say keeps every control.
 
 ### Not added
@@ -17,6 +19,7 @@
 
 ### Fixed
 - **`software_update_available` no longer reads false when the car has not said.** The proto's `UpdateAvailability` is 0 unknown and 1 available, with no "none waiting", and proto3 sends 0 for a missing field; it was published as false. It is now true or unknown.
+- **The windows summary no longer says closed while a window cannot say.** A close sent with three windows down read back as closed in ten seconds while they were still down: the driver's window reported fully closed and the rest unknown, and only open windows counted against closed. A window that reads unknown now keeps the summary unknown.
 - **A missing GPS block is no longer a position.** A real message without one reads 0.0, 0.0, which was published as the car's location.
 
 ## 0.3.1 (2026-10-14)
