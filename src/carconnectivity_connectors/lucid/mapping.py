@@ -9,7 +9,8 @@ nothing has checked them while driving or charging. Lucid reports km, km/h for s
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional, Tuple
 
 from carconnectivity.charging import Charging, ChargingConnector
@@ -543,6 +544,41 @@ def waiting_update(software_update: Any) -> Optional[str]:
     if not update_available(_dig(software_update, "update_available")):
         return None
     return text(_dig(software_update, "version_available"))
+
+
+# A version the history lists again within this long of its first install is the same
+# install recorded twice (a factory bootloader pass writes a version several times in
+# minutes), not a second update.
+OTA_REPEAT_S = 86400.0
+
+
+def ota_history(values: Any) -> Optional[str]:
+    """The OTA history as JSON, oldest first: `[{"version": "3.1.51", "at": "2025-12-19T10:00:00Z"}, ...]`.
+
+    Only the version and the time are kept. The entries' `name` is Lucid's build name and
+    carries other cars' VINs, so it is never read. The time is naive in the reply and read
+    as UTC. An entry without a version or a readable time is skipped; a version repeated
+    within OTA_REPEAT_S of its first install keeps the first. None when nothing is usable,
+    so an empty reply is not published as a history."""
+    rows = []
+    for entry in values or ():
+        version, stamp = text(_dig(entry, "version")), text(_dig(entry, "updateTime"))
+        try:
+            when = datetime.fromisoformat(stamp) if stamp else None
+        except ValueError:
+            when = None
+        if version is None or when is None:
+            continue
+        when = when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
+        rows.append((when, version))
+    kept: list = []
+    first: dict = {}
+    for when, version in sorted(rows):
+        if version in first and (when - first[version]).total_seconds() < OTA_REPEAT_S:
+            continue
+        first.setdefault(version, when)
+        kept.append({"version": version, "at": when.strftime("%Y-%m-%dT%H:%M:%SZ")})
+    return json.dumps(kept, separators=(",", ":")) if kept else None
 
 
 def install_time(minutes: Any) -> Optional[timedelta]:

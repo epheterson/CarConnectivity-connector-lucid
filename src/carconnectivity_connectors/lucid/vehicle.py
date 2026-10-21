@@ -122,6 +122,10 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
                                                                               tags={'connector_custom'})
         self.software_update_release_notes_url: StringAttribute = StringAttribute(name="software_update_release_notes_url", parent=self,
                                                                                   tags={'connector_custom'})
+        # Every version the car has installed, oldest first, as JSON text:
+        # [{"version": "3.1.51", "at": "2025-12-19T10:00:00Z"}, ...] with the time in UTC.
+        # Read from Lucid's OTA history once, and again when the car's version changes.
+        self.software_history: StringAttribute = StringAttribute(name="software_history", parent=self, tags={'connector_custom'})
         self.battery_health_level: FloatAttribute = FloatAttribute(name="battery_health_level", parent=self, precision=0.01, tags={'connector_custom'})
 
 

@@ -20,6 +20,7 @@ that ever wakes the car, and they do it explicitly (LucidSession.command).
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import json
 import logging
 import threading
 import time
@@ -73,6 +74,11 @@ RELEASE_NOTES_RETRY_S = 3600.0
 # The car takes a moment to report what a command did; poll once soon after rather
 # than waiting out the interval. One extra read, which never wakes the car.
 REFRESH_AFTER_COMMAND_S = 6.0
+# The OTA history is read once, then again after this long, or when the car's version stops
+# matching its newest entry (a new install the history had not listed yet).
+OTA_HISTORY_REFRESH_S = 86400.0
+# A read that failed, or that does not yet list the car's own version, is tried again after this.
+OTA_HISTORY_RETRY_S = 3600.0
 
 
 async def _keyless_driving(api: Any, vehicle: Any, on: bool) -> None:
@@ -110,6 +116,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # (monotonic seconds), so a new version is not held back by an old one's failure.
         self._release_notes: Dict[str, Tuple[str, Optional[str], Optional[str]]] = {}
         self._release_notes_retry: Dict[Tuple[str, str], float] = {}
+        # OTA history per VIN: (published JSON, when to read it again in monotonic seconds, the
+        # car's version when it was read). One read per VIN, then rarely; see _apply_software_history.
+        self._ota_history: Dict[str, Tuple[Optional[str], float, Optional[str]]] = {}
 
         self.connection_state: EnumAttribute[ConnectionState] = EnumAttribute(name="connection_state", parent=self, value_type=ConnectionState,
                                                                               value=ConnectionState.DISCONNECTED, tags={'connector_custom'})
@@ -277,6 +286,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 self._add_commands(vehicle)
             self._apply(vehicle, lucid_vehicle)
             self._apply_release_notes(vehicle, lucid_vehicle)
+            self._apply_software_history(vehicle, lucid_vehicle)
         self._lucid_vehicles = lucid_vehicles
         for vin in set(garage.list_vehicle_vins()) - seen:
             gone = garage.get_vehicle(vin)
@@ -313,6 +323,31 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 self._release_notes_retry = {key: at for key, at in self._release_notes_retry.items() if key[0] != vin}
         vehicle.software_update_release_notes._set_value(notes)
         vehicle.software_update_release_notes_url._set_value(link)
+
+    def _apply_software_history(self, vehicle: GenericVehicle, lucid_vehicle: Any) -> None:
+        """Every installed version from Lucid's OTA history: read once, then again when the
+        car's version changes or a day has passed, never on each poll. A read that fails, or
+        whose newest entry is not the version the car runs, is tried again in an hour; the
+        poll goes on either way, and what was last read stays published."""
+        if not isinstance(vehicle, LucidVehicle):
+            return
+        vin: str = vehicle.vin.value
+        current = mapping.text(_dig(lucid_vehicle, "state", "chassis", "software_version"))
+        held = self._ota_history.get(vin)
+        if held is None or (held[2] != current and current is not None) or time.monotonic() >= held[1]:
+            history, retry_s = held[0] if held else None, OTA_HISTORY_RETRY_S
+            try:
+                fresh = mapping.ota_history(_dig(self._session.ota_history(vin), "values"))
+            except Exception as err:  # pylint: disable=broad-except
+                # Rate limits included: a missing history is not worth the poll's backoff.
+                LOG.warning('The OTA history could not be read (%s); trying again in %.0fs', err, retry_s)
+            else:
+                history = fresh or history
+                newest = json.loads(history)[-1]["version"] if history else None
+                retry_s = OTA_HISTORY_REFRESH_S if current is None or newest == current else OTA_HISTORY_RETRY_S
+            held = (history, time.monotonic() + retry_s, current)
+            self._ota_history[vin] = held
+        vehicle.software_history._set_value(held[0])
 
     # -- commands --------------------------------------------------------------
     def _add_commands(self, vehicle: GenericVehicle) -> None:

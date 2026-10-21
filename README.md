@@ -127,6 +127,7 @@ From 0.4.0. The meanings come from the protobuf's field and enum names; one read
 | `gps_elevation_raw` | `gps.elevation` | the car's number as sent, unit unknown; None without a fix or when 0 (see below) |
 | `battery_health_level` | `battery.battery_health_level` | the car's number as sent; probably a state of health in percent, but the proto does not say, so it is not named or scaled as one |
 | `software_update_version` | `software_update.version_available` | the waiting version, e.g. `3.1.2`; only while `update_available` says AVAILABLE, as are the install time and the notes |
+| `software_history` | OTA version history | every version the car has installed, oldest first, as JSON text: `[{"version": "3.1.51", "at": "2025-12-19T10:00:00Z"}]`, times in UTC. Read once, again when the car's version changes or after a day, never per poll. Lucid's build names are not kept |
 | `software_update_install_time` | `software_update.install_duration_minutes` | how long it takes to install |
 | `software_update_release_notes`, `software_update_release_notes_url` | `get_update_release_notes` | Lucid's notes for the waiting version and their link, fetched once per version (an hour later if the request fails), never per poll. Air only: the library can ask only for the Air's document, so a Gravity gets none rather than the wrong car's |
 
