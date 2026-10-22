@@ -8,6 +8,8 @@ A [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity) connector 
 
 Verified against a 2026 Gravity on 2026-09-03.
 
+**Unofficial.** This project is not made, endorsed or supported by Lucid Motors. It talks to the API the Lucid app uses, which Lucid can change or close at any time. Keep its polling modest (see [Polling budget](#polling-budget)) so it stays a good neighbour.
+
 
 ## Install
 
@@ -136,6 +138,20 @@ From 0.4.0. The meanings come from the protobuf's field and enum names; one read
 Not published: `charging.charge_session_mi`, the range added this session, which may be miles as named or km as Lucid's other range figures are.
 
 `software_update_available` is true when the car announces an update and unknown otherwise: the proto has no value for "none waiting", so 0 no longer reads as false.
+
+## Polling budget
+
+What one account costs Lucid's servers, with the default config and one or more cars (a poll reads every car on the account in one call):
+
+| Request | When | Per hour |
+|---|---|---|
+| Vehicle list (all state) | every `interval` (default and minimum 60 s); every `driving_interval` while a car drives | 60 parked; up to 240 driving at 15 s |
+| Session refresh | when under 60 s of the 5-minute token remain | about 15 |
+| OTA version history | once per car, again when its version changes, or daily; an hour after a failure | under 1 |
+| Release notes | once per waiting version (Air only); an hour after a failure | under 1 |
+| Commands | only when sent, plus one early poll 6 s later | as used |
+
+Polls never wake the car; only commands do. A rate-limit refusal backs off from 5 s doubling to 15 minutes. Run one client per account: a second logger or integration on the same login shares this allowance.
 
 ## Session lifetime — read this if you run it long
 
