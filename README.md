@@ -1,7 +1,5 @@
 # CarConnectivity-connector-lucid
 
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/epheterson/CarConnectivity-connector-lucid/badge)](https://scorecard.dev/viewer/?uri=github.com/epheterson/CarConnectivity-connector-lucid)
-
 A [CarConnectivity](https://github.com/tillsteinbach/CarConnectivity) connector for Lucid Motors vehicles (Air and Gravity), built on [python-lucidmotors](https://github.com/nshp/python-lucidmotors).
 
 **Read-only by default.** It polls the same mobile API the Lucid app uses and populates the CarConnectivity model: state, odometer, battery level / range / capacity / cell temperatures, charging state, target and time to finish, position, doors and locks, windows, climatization, window heating, software version and the waiting update. It also reads what the car says about itself that the shared model has no slot for (see [What else it reads](#what-else-it-reads)). Reads never wake the car, so polling costs nothing in battery drain. Commands (lock, climate, charging, trunk and the rest from 0.2.0; Halo Secure, windows, seats and more from 0.3.0) but stay off unless the config turns them on; see [Commands](#commands).
