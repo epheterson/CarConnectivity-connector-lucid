@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-10-22)
 
 ### Added
 - **More of what the car reports, read-only.** Every field below is read off the protobuf's names. One read-only reading of a parked, unplugged Gravity (2026-10-14) settled their zero and sentinel cases and showed two units to be unknown (see Not added); none has been seen while driving, charging or with an update waiting. Each is unknown when the car leaves it out, sends proto3's 0 or a sentinel, rather than a guess. Standard CarConnectivity slots are used wherever one exists. The README's "What else it reads" table lists them all.
