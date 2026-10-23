@@ -353,3 +353,14 @@ def test_the_real_reading_has_no_update_waiting(vehicle):
     Connector._apply_cabin(vehicle, gravity_reading().state, MEASURED)
     assert vehicle.software_update_available.value is None and vehicle.software_update_version.value is None
     assert vehicle.software_update_install_time.value is None
+
+
+def test_the_keyless_and_valet_numbers_are_the_protos_own():
+    """mapping keeps the enum numbers it reads as plain constants (it imports no protobuf); these
+    tie them to the library's enums, so a renumbering upstream fails here, not on a car."""
+    from lucidmotors.gen import vehicle_state_service_pb2 as vs
+
+    from carconnectivity_connectors.lucid import mapping
+
+    assert mapping.KEYLESS_ON == {vs.KEYLESS_DRIVING_ON} and mapping.KEYLESS_OFF == {vs.KEYLESS_DRIVING_OFF}
+    assert mapping.DRIVE_MODE_VALET == vs.DRIVE_MODE_VALET

@@ -79,6 +79,7 @@ Off by default. Without the option the connector creates no command objects at a
 | Steering wheel heater | `climatization/commands/steering-wheel-heater` | `off`, `low`, `medium`, `high` | `steering_wheel_heater_control` |
 | Battery preconditioning | `charging/commands/battery-preconditioning` | `on`, `off` | `battery_precon_on` / `battery_precon_off` |
 | AC current limit | `charging/settings/maximum_current` | whole amps, 8 to 80 | `set_ac_current_limit` |
+| Keyless driving | `commands/keyless-driving` | `on`, `off`; the car turns it on only when locked with no key in reach | `KeylessDrivingActionRequest` (sent the way the library's own calls are; it has no method for it) |
 
 Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "mode": "heat", "level": "low"}`). The state each one changes is published where the API has it, so a UI can show a toggle:
 
@@ -95,6 +96,7 @@ Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "
 | Steering wheel heater | `steering_wheel_heater` | `hvac.steering_heater_level` |
 | Battery preconditioning | `battery_preconditioning` | `battery.preconditioning_status` |
 | AC current limit | `charging/settings/maximum_current` | `charging.energy_ac_current_limit` |
+| Keyless driving | `keyless_driving` | `state.keyless_driving` |
 | Defrost, rear window heat | `window_heating/heating_state`, `window_heating/windows/front`, `.../rear` | `hvac.defrost`, `hvac.rear_window_heating_status` (on if either is on, off only when both say off; the rear's "lost comm" states read unknown) |
 
 Sentry at home and at work have no state in the API that the connector can read, so they are commands only.
@@ -129,6 +131,7 @@ From 0.4.0. The meanings come from the protobuf's field and enum names; one read
 | `gps_elevation_raw` | `gps.elevation` | the car's number as sent, unit unknown; None without a fix or when 0 (see below) |
 | `battery_health_level` | `battery.battery_health_level` | the car's number as sent; probably a state of health in percent, but the proto does not say, so it is not named or scaled as one |
 | `software_update_version` | `software_update.version_available` | the waiting version, e.g. `3.1.2`; only while `update_available` says AVAILABLE, as are the install time and the notes |
+| `valet` | `state.drive_mode` | true in Valet mode, false in any other mode, unknown when the car does not say. Read only: nothing in the API sets it |
 | `software_history` | OTA version history | every version the car has installed, oldest first, as JSON text: `[{"version": "3.1.51", "at": "2025-12-19T10:00:00Z"}]`, times in UTC. Read once, again when the car's version changes or after a day, never per poll. Lucid's build names are not kept |
 | `software_update_install_time` | `software_update.install_duration_minutes` | how long it takes to install |
 | `software_update_release_notes`, `software_update_release_notes_url` | `get_update_release_notes` | Lucid's notes for the waiting version and their link, fetched once per version (an hour later if the request fails), never per poll. Air only: the library can ask only for the Air's document, so a Gravity gets none rather than the wrong car's |

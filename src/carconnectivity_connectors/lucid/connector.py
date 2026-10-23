@@ -313,7 +313,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             _, notes, link = self._release_notes[vin]
         elif version is not None and time.monotonic() >= self._release_notes_retry.get((vin, version), 0.0):
             try:
-                notes, link = mapping.release_notes(self._session.release_notes(lucid_vehicle, version))
+                notes, link = mapping.release_notes(self._session.release_notes(lucid_vehicle, version), version)
             except Exception as err:  # pylint: disable=broad-except
                 # Rate limits included: a missing note is not worth the poll's backoff.
                 LOG.warning('Release notes for %s could not be fetched (%s); trying again in %.0fs', version, err, RELEASE_NOTES_RETRY_S)

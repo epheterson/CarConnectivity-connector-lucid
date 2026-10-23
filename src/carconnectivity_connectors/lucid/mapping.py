@@ -599,8 +599,13 @@ def release_notes_apply(model: Optional[int]) -> bool:
     return model == MODEL_AIR
 
 
-def release_notes(document: Any) -> Tuple[Optional[str], Optional[str]]:
-    """(text, link) from a GetDocumentInfoResponse; either is None when the reply is empty."""
+def release_notes(document: Any, version: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """(text, link) from a GetDocumentInfoResponse; either is None when the reply is empty.
+    A reply that names a version other than the one asked for is another release's notes:
+    ValueError, so the read counts as failed and is tried again later."""
+    said = text(_dig(document, "info", "version"))
+    if version is not None and said is not None and said != version:
+        raise ValueError(f"the notes Lucid sent are for {said}, not {version}")
     return text(_dig(document, "info", "description")), text(_dig(document, "url"))
 
 

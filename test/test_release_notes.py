@@ -93,6 +93,17 @@ def test_nothing_waiting_asks_for_nothing(rig):
     assert vehicle.software_update_release_notes.value is None and vehicle.software_update_release_notes_url.value is None
 
 
+def test_notes_for_another_version_are_a_failed_read_tried_again_later(rig):
+    connector, api, cc = rig
+    api.software_update = waiting("3.2.0")
+    api.notes = pb.GetDocumentInfoResponse(url="https://example.invalid/notes/3.1.2", info=pb.DocumentInfo(version="3.1.2", description="Faster charging curve."))
+    connector.fetch_vehicles()
+    vehicle = cc.garage.get_vehicle(VIN)
+    assert vehicle.software_update_release_notes.value is None and vehicle.software_update_release_notes_url.value is None, "3.1.2's notes are not 3.2.0's"
+    connector.fetch_vehicles()
+    assert len(api.asked) == 1, "a mismatch waits out the retry like any failed read"
+
+
 def test_the_waiting_version_and_its_notes_once_per_version(rig):
     connector, api, cc = rig
     api.software_update = waiting()
@@ -174,6 +185,7 @@ def test_a_failure_holds_back_only_its_own_version(rig):
     connector.fetch_vehicles()
     api.fail_with = None
     api.software_update = waiting("3.2.0")
+    api.notes = pb.GetDocumentInfoResponse(url="https://example.invalid/notes/3.2.0", info=pb.DocumentInfo(version="3.2.0", description="Faster charging curve."))
     connector.fetch_vehicles()
     assert [v for v, _ in api.asked] == ["3.1.2", "3.2.0"], "a new version is asked for at once"
     assert cc.garage.get_vehicle(VIN).software_update_release_notes.value == "Faster charging curve."
