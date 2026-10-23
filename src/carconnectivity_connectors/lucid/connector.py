@@ -20,6 +20,7 @@ that ever wakes the car, and they do it explicitly (LucidSession.command).
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import json
 import logging
 import threading
 import time
@@ -32,6 +33,7 @@ from carconnectivity.command_impl import ChargingStartStopCommand, Climatization
     LockUnlockCommand, WakeSleepCommand, WindowHeatingStartStopCommand
 from carconnectivity.doors import Doors
 from carconnectivity.windows import Windows
+from carconnectivity.window_heating import WindowHeatings
 from carconnectivity.drive import ElectricDrive, GenericDrive
 from carconnectivity.enums import ConnectionState
 from carconnectivity.errors import APICompatibilityError, AuthenticationError, CommandError, RetrievalError, \
@@ -67,9 +69,27 @@ AC_CURRENT_MIN, AC_CURRENT_MAX = 8, 80
 # Plausible cabin set-points in Celsius: a guard against a unit mix-up (68 sent as C),
 # not a claim about what the car accepts.
 CABIN_TEMP_MIN_C, CABIN_TEMP_MAX_C = 10.0, 35.0
+# A release notes request that failed is tried again after this, not on the next poll.
+RELEASE_NOTES_RETRY_S = 3600.0
 # The car takes a moment to report what a command did; poll once soon after rather
 # than waiting out the interval. One extra read, which never wakes the car.
 REFRESH_AFTER_COMMAND_S = 6.0
+# The OTA history is read once, then again after this long, or when the car's version stops
+# matching its newest entry (a new install the history had not listed yet).
+OTA_HISTORY_REFRESH_S = 86400.0
+# A read that failed, or that does not yet list the car's own version, is tried again after this.
+OTA_HISTORY_RETRY_S = 3600.0
+
+
+async def _keyless_driving(api: Any, vehicle: Any, on: bool) -> None:
+    """KeylessDrivingAction, which the library has the request for but no call, sent the
+    way its own calls are; the connector has woken the car already, as for every command."""
+    from lucidmotors import _check_for_api_error  # pylint: disable=import-outside-toplevel
+    from lucidmotors.gen import vehicle_state_service_pb2  # pylint: disable=import-outside-toplevel
+
+    action = next(iter(mapping.KEYLESS_ON if on else mapping.KEYLESS_OFF))
+    request = vehicle_state_service_pb2.KeylessDrivingActionRequest(vehicle_id=vehicle.vehicle_id, action=action)  # pylint: disable=no-member
+    await _check_for_api_error(api._vehicle_service.KeylessDrivingAction(request))  # pylint: disable=protected-access
 
 
 class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
@@ -91,6 +111,14 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # The library's Vehicle message per VIN from the latest poll: a command needs its
         # vehicle_id, and its power state says whether the car is asleep.
         self._lucid_vehicles: Dict[str, Any] = {}
+        # Release notes per VIN: (version, text, link) for the waiting version, fetched once
+        # per version; and, per VIN and version, when a failed fetch may be tried again
+        # (monotonic seconds), so a new version is not held back by an old one's failure.
+        self._release_notes: Dict[str, Tuple[str, Optional[str], Optional[str]]] = {}
+        self._release_notes_retry: Dict[Tuple[str, str], float] = {}
+        # OTA history per VIN: (published JSON, when to read it again in monotonic seconds, the
+        # car's version when it was read). One read per VIN, then rarely; see _apply_software_history.
+        self._ota_history: Dict[str, Tuple[Optional[str], float, Optional[str]]] = {}
 
         self.connection_state: EnumAttribute[ConnectionState] = EnumAttribute(name="connection_state", parent=self, value_type=ConnectionState,
                                                                               value=ConnectionState.DISCONNECTED, tags={'connector_custom'})
@@ -257,6 +285,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             if self.active_config['commands']:
                 self._add_commands(vehicle)
             self._apply(vehicle, lucid_vehicle)
+            self._apply_release_notes(vehicle, lucid_vehicle)
+            self._apply_software_history(vehicle, lucid_vehicle)
         self._lucid_vehicles = lucid_vehicles
         for vin in set(garage.list_vehicle_vins()) - seen:
             gone = garage.get_vehicle(vin)
@@ -266,6 +296,58 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # update rather than each attribute: notify() has been accumulating their flags
         # since the last transaction_end, and nothing else calls it.
         self.car_connectivity.transaction_end()
+
+    def _apply_release_notes(self, vehicle: GenericVehicle, lucid_vehicle: Any) -> None:
+        """Release notes for the waiting update: one request per version, kept until the
+        version changes, never one per poll. A failed request is logged and tried again an
+        hour later; the poll goes on either way."""
+        if not isinstance(vehicle, LucidVehicle):
+            return
+        vin: str = vehicle.vin.value
+        version = mapping.waiting_update(_dig(lucid_vehicle, "state", "software_update"))
+        if not mapping.release_notes_apply(_dig(lucid_vehicle, "config", "model")):
+            version = None  # never another model's notes
+        notes: Optional[str] = None
+        link: Optional[str] = None
+        if version is not None and vin in self._release_notes and self._release_notes[vin][0] == version:
+            _, notes, link = self._release_notes[vin]
+        elif version is not None and time.monotonic() >= self._release_notes_retry.get((vin, version), 0.0):
+            try:
+                notes, link = mapping.release_notes(self._session.release_notes(lucid_vehicle, version), version)
+            except Exception as err:  # pylint: disable=broad-except
+                # Rate limits included: a missing note is not worth the poll's backoff.
+                LOG.warning('Release notes for %s could not be fetched (%s); trying again in %.0fs', version, err, RELEASE_NOTES_RETRY_S)
+                self._release_notes_retry[(vin, version)] = time.monotonic() + RELEASE_NOTES_RETRY_S
+            else:
+                self._release_notes[vin] = (version, notes, link)
+                self._release_notes_retry = {key: at for key, at in self._release_notes_retry.items() if key[0] != vin}
+        vehicle.software_update_release_notes._set_value(notes)
+        vehicle.software_update_release_notes_url._set_value(link)
+
+    def _apply_software_history(self, vehicle: GenericVehicle, lucid_vehicle: Any) -> None:
+        """Every installed version from Lucid's OTA history: read once, then again when the
+        car's version changes or a day has passed, never on each poll. A read that fails, or
+        whose newest entry is not the version the car runs, is tried again in an hour; the
+        poll goes on either way, and what was last read stays published."""
+        if not isinstance(vehicle, LucidVehicle):
+            return
+        vin: str = vehicle.vin.value
+        current = mapping.text(_dig(lucid_vehicle, "state", "chassis", "software_version"))
+        held = self._ota_history.get(vin)
+        if held is None or (held[2] != current and current is not None) or time.monotonic() >= held[1]:
+            history, retry_s = held[0] if held else None, OTA_HISTORY_RETRY_S
+            try:
+                fresh = mapping.ota_history(_dig(self._session.ota_history(vin), "values"))
+            except Exception as err:  # pylint: disable=broad-except
+                # Rate limits included: a missing history is not worth the poll's backoff.
+                LOG.warning('The OTA history could not be read (%s); trying again in %.0fs', err, retry_s)
+            else:
+                history = fresh or history
+                newest = json.loads(history)[-1]["version"] if history else None
+                retry_s = OTA_HISTORY_REFRESH_S if current is None or newest == current else OTA_HISTORY_RETRY_S
+            held = (history, time.monotonic() + retry_s, current)
+            self._ota_history[vin] = held
+        vehicle.software_history._set_value(held[0])
 
     # -- commands --------------------------------------------------------------
     def _add_commands(self, vehicle: GenericVehicle) -> None:
@@ -301,6 +383,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             (vehicle.commands, AlarmCommand, 'alarm', self._choice_hook({
                 choice: (f'set the alarm {choice}', lambda api, v, mode=mode: api.alarm_control(v, mode))
                 for choice, mode in ((AlarmCommand.Command.OFF, 1), (AlarmCommand.Command.ON, 2), (AlarmCommand.Command.SILENT, 3))})),
+            # Keyless driving: drive with no key in the car, as the app's Keyless Drive does.
+            (vehicle.commands, OnOffCommand, 'keyless-driving', self._choice_hook({
+                OnOffCommand.Command.ON: ('turn on keyless driving', lambda api, v: _keyless_driving(api, v, True)),
+                OnOffCommand.Command.OFF: ('turn off keyless driving', lambda api, v: _keyless_driving(api, v, False))})),
             # Windows, headlights.
             (vehicle.commands, WindowsCommand, 'windows', self._choice_hook({
                 WindowsCommand.Command.VENT: ('vent windows', lambda api, v: api.open_all_windows(v)),
@@ -318,7 +404,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                                      (OnOffCommand.Command.OFF, mapping.CREATURE_COMFORT_MODE[False]))})),
             (vehicle.climatization.commands, LevelCommand, 'steering-wheel-heater', self._choice_hook({
                 choice: (f'set steering wheel heater {choice}', lambda api, v, level=level: api.steering_wheel_heater_control(v, level))
-                for choice, level in mapping.STEERING_LEVEL.items()})),
+                for choice, level in mapping.STEERING_LEVEL.items()}, refusal=mapping.steering_heater_refusal)),
             (vehicle.climatization.commands, SeatClimateCommand, 'seat-climate', self._on_seat_climate),
             (vehicle.charging.commands, OnOffCommand, 'battery-preconditioning', self._choice_hook({
                 OnOffCommand.Command.ON: ('turn on battery preconditioning', lambda api, v: api.battery_precon_on(v)),
@@ -375,17 +461,29 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         timer.daemon = True
         timer.start()
 
+    def _config_of(self, vehicle: LucidElectricVehicle) -> Any:
+        """The car's VehicleConfig from the latest poll: what it is fitted with."""
+        return _dig(self._lucid_vehicles.get(vehicle.vin.value), "config")
+
+    @staticmethod
+    def _refuse_if(reason: Optional[str]) -> None:
+        """Refuse a command the car's own config says it cannot do, before anything is sent."""
+        if reason is not None:
+            raise CommandError(f'Not sent: {reason}')
+
     @staticmethod
     def _command_name(command_arguments: Union[str, Dict[str, Any]], enum: type) -> Any:
         if not isinstance(command_arguments, dict) or not isinstance(command_arguments.get('command'), enum):
             raise CommandError(f'Command arguments are not as expected: {command_arguments}')
         return command_arguments['command']
 
-    def _choice_hook(self, actions: Dict[Any, Tuple[str, Callable[[Any, Any], Awaitable[None]]]]) \
+    def _choice_hook(self, actions: Dict[Any, Tuple[str, Callable[[Any, Any], Awaitable[None]]]],
+                     refusal: Optional[Callable[[Any], Optional[str]]] = None) \
             -> Callable[[Any, Union[str, Dict[str, Any]]], Union[str, Dict[str, Any]]]:
         """A set-hook for one of the connector's own choice commands: each choice it takes
         is a (what, action) pair sent like any other command; a choice not in the table,
-        the "on" of an alarm that can only be silenced, is refused before anything is sent."""
+        the "on" of an alarm that can only be silenced, is refused before anything is sent,
+        and so is any choice when `refusal`, given the car's config, names a reason."""
         enum = type(next(iter(actions)))
 
         def hook(command: Any, command_arguments: Union[str, Dict[str, Any]]) -> Union[str, Dict[str, Any]]:
@@ -393,6 +491,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             choice = self._command_name(command_arguments, enum)
             if choice not in actions:
                 raise CommandError(f'{command.name} takes only {", ".join(str(c) for c in actions)}')
+            self._refuse_if(refusal(self._config_of(vehicle)) if refusal is not None else None)
             what, action = actions[choice]
             self._send(vehicle, what, action)
             return command_arguments
@@ -458,6 +557,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if self._command_name(command_arguments, OpenCloseCommand.Command) == OpenCloseCommand.Command.OPEN:
             self._send(vehicle, 'open frunk', lambda api, v: api.frunk_open(v))
         else:
+            self._refuse_if(mapping.frunk_close_refusal(self._config_of(vehicle)))
             self._send(vehicle, 'close frunk', lambda api, v: api.frunk_close(v))
         return command_arguments
 
@@ -494,6 +594,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         zones = mapping.SEAT_ZONES.get((seat, mode))
         if zones is None or level not in mapping.SEAT_MODE:
             raise CommandError(f'Command arguments are not as expected: {command_arguments}')
+        self._refuse_if(mapping.seat_refusal(self._config_of(vehicle), seat, mode))
         car_mode = mapping.SEAT_MODE[level]
         self._send(vehicle, f'set {seat} seat {mode} {level}',
                    lambda api, v: api.seat_climate_control(v, **{zone: car_mode for zone in zones}))
@@ -536,8 +637,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self._apply_doors(vehicle, st, measured)
         self._apply_windows(vehicle, st, measured)
         self._apply_cabin(vehicle, st, measured)
+        self._apply_security(vehicle, st, measured)
         self._apply_tires(vehicle, st, measured)
         self._apply_climate(vehicle, st, measured)
+        self._apply_window_heating(vehicle, st, measured)
         self._apply_controls(vehicle, st, measured)
 
     @staticmethod
@@ -609,12 +712,21 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # session's own limit can be lower, held down by the charger. 0 is the car not saying.
         ac_limit = _f(_dig(ch, "energy_ac_current_limit"))
         sv.charging.settings.maximum_current._set_value(ac_limit if ac_limit else None, measured=measured)
+        sv.charging.connector.lock_state._set_value(mapping.cable_lock(_dig(ch, "cable_lock"), cs), measured=measured)
+        # The car's own energy meter for this session, and when it will reach the limit.
+        sv.charge_session_energy._set_value(mapping.charge_session_energy(cs, _dig(ch, "charge_session_kwh")), measured=measured, unit=Energy.KWH)
+        sv.charging.estimated_date_reached._set_value(mapping.charge_finish(measured, cs, _dig(ch, "session_minutes_remaining")), measured=measured)
 
     @staticmethod
     def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         gps = _dig(st, "gps")
         lat, lon = _f(_dig(gps, "location", "latitude")), _f(_dig(gps, "location", "longitude"))
-        if lat is None or lon is None:
+        fix = mapping.has_fix(lat, lon)
+        # gps.elevation as the car sends it, not as position.altitude: a real Gravity sent
+        # 8932 where cars beside it record 123 m, so its unit is not metres, feet,
+        # decimetres or centimetres. Raw, it can be calibrated against known heights.
+        sv.gps_elevation_raw._set_value(mapping.nonzero(_dig(gps, "elevation")) if fix else None, measured=measured)
+        if not fix:
             return
         sv.position.latitude._set_value(lat, measured=measured)
         sv.position.longitude._set_value(lon, measured=measured)
@@ -657,9 +769,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     @staticmethod
     def _apply_windows(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         """Four windows, the same way the doors are done: only the ones that reported
-        are summarised, so an absent body block is "unknown" rather than "all closed"."""
+        are summarised, so an absent body block is "unknown" rather than "all closed". Any one
+        down is open; otherwise one that cannot say (mid-travel reads UNKNOWN) keeps it unknown."""
         positions = _dig(st, "body", "window_position")
-        any_open = False
+        any_open = any_unknown = False
         reported = False
         for window_id, field in mapping.WINDOWS.items():
             raw = _dig(positions, field)
@@ -673,9 +786,11 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             state = mapping.window_open_state(raw)
             window.open_state._set_value(state, measured=measured)
             any_open = any_open or state in (Windows.OpenState.OPEN, Windows.OpenState.AJAR)
+            any_unknown = any_unknown or state is Windows.OpenState.UNKNOWN
             reported = True
         if reported:
-            sv.windows.open_state._set_value(Windows.OpenState.OPEN if any_open else Windows.OpenState.CLOSED, measured=measured)
+            summary = Windows.OpenState.OPEN if any_open else Windows.OpenState.UNKNOWN if any_unknown else Windows.OpenState.CLOSED
+            sv.windows.open_state._set_value(summary, measured=measured)
         else:
             sv.windows.open_state._set_value(Windows.OpenState.UNKNOWN, measured=measured)
 
@@ -689,8 +804,31 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.battery_capacity_kwh._set_value(_f(_dig(battery, "capacity_kwhr")), measured=measured)
         sv.battery_energy_kwh._set_value(_f(_dig(battery, "kwhr")), measured=measured)
         sv.battery_health_warning._set_value(mapping.warning_flag(_dig(battery, "battery_health")), measured=measured)
-        update = _dig(st, "software_update", "update_available")
-        sv.software_update_available._set_value(bool(update) if update is not None else None, measured=measured)
+        # The car's raw figure beside that warning. Very likely a state-of-health percentage,
+        # but the proto does not say so, so it is published as the car's number under the
+        # proto's name. 0 is the car not saying.
+        sv.battery_health_level._set_value(mapping.nonzero(_dig(battery, "battery_health_level")), measured=measured)
+        software_update = _dig(st, "software_update")
+        version = mapping.waiting_update(software_update)
+        sv.software_update_version._set_value(version, measured=measured)
+        install = mapping.install_time(_dig(software_update, "install_duration_minutes")) if version is not None else None
+        sv.software_update_install_time._set_value(install, measured=measured)
+        sv.software_update_available._set_value(mapping.update_available(_dig(st, "software_update", "update_available")), measured=measured)
+
+    @staticmethod
+    def _apply_security(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """Why Sentry is paused, its drive, and the warnings worth a phone alert; all connector-specific."""
+        sentry = _dig(st, "sentry_state")
+        sv.sentry_inactive_reason._set_value(mapping.sentry_inactive_reason(sentry), measured=measured)
+        usb = _dig(sentry, "usb_drive_status")
+        sv.sentry_usb_drive_connected._set_value(mapping.two_state(usb, mapping.USB_CONNECTED, mapping.USB_NOT_CONNECTED), measured=measured)
+        body = _dig(st, "body")
+        sv.living_object_detection._set_value(mapping.pick(mapping.LIVING_OBJECT_DETECTION, _dig(body, "living_object_detection_status")),
+                                              measured=measured)
+        sv.unattended_occupant_detection._set_value(
+            mapping.pick(mapping.UNATTENDED_OCCUPANT_DETECTION, _dig(body, "unattended_occupant_detection_status")), measured=measured)
+        sv.keyfob_battery_low._set_value(mapping.two_state(_dig(body, "keyfob_battery_status"), mapping.KEYFOB_LOW, mapping.KEYFOB_OK),
+                                         measured=measured)
 
     @staticmethod
     def _apply_tires(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -716,12 +854,42 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             sv.climatization.settings.target_temperature._set_value(target, measured=measured, unit=Temperature.C)
 
     @staticmethod
+    def _apply_window_heating(sv: LucidVehicle, st: Any, measured: datetime) -> None:
+        """Defrost and the rear window heater as window_heatings, the state behind the
+        defrost command. A heater entry exists once it has reported."""
+        hvac = _dig(st, "hvac")
+        heaters = {"front": mapping.two_state(_dig(hvac, "defrost"), mapping.DEFROST_ON, mapping.DEFROST_OFF),
+                   "rear": mapping.two_state(_dig(hvac, "rear_window_heating_status"), mapping.REAR_WINDOW_HEAT_ON, mapping.REAR_WINDOW_HEAT_OFF)}
+        for window_id, on in heaters.items():
+            if on is None:
+                if window_id in sv.window_heatings.windows:
+                    sv.window_heatings.windows[window_id].heating_state._set_value(WindowHeatings.HeatingState.UNKNOWN, measured=measured)
+                continue
+            if window_id not in sv.window_heatings.windows:
+                sv.window_heatings.windows[window_id] = WindowHeatings.WindowHeating(
+                    window_id=window_id, window_heatings=sv.window_heatings, initialization=sv.window_heatings.get_initialization(window_id))
+            state = WindowHeatings.HeatingState.ON if on else WindowHeatings.HeatingState.OFF
+            sv.window_heatings.windows[window_id].heating_state._set_value(state, measured=measured)
+        # On if any heater is on; off only when every heater says off; otherwise unknown, since a
+        # heater that did not say may be the one that is on.
+        if any(heaters.values()):
+            overall = WindowHeatings.HeatingState.ON
+        elif all(on is False for on in heaters.values()):
+            overall = WindowHeatings.HeatingState.OFF
+        else:
+            overall = WindowHeatings.HeatingState.UNKNOWN
+        sv.window_heatings.heating_state._set_value(overall, measured=measured)
+
+    @staticmethod
     def _apply_controls(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         """The state behind the 0.3.0 commands, each where a UI would look for its toggle."""
         # EnhancedDeterrenceState shares SentryEnablementState's numbers: 1 enabled, 2 disabled, 3 idle.
         sv.enhanced_deterrence._set_value(mapping.sentry_armed(_dig(st, "sentry_state", "enhanced_deterrence_state")), measured=measured)
         sv.alarm._set_value(mapping.alarm_mode(_dig(st, "alarm", "mode")), measured=measured)
+        sv.alarm_status._set_value(mapping.pick(mapping.ALARM_STATUS, _dig(st, "alarm", "status")), measured=measured)
         sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
+        sv.keyless_driving._set_value(mapping.two_state(_dig(st, "keyless_driving"), mapping.KEYLESS_ON, mapping.KEYLESS_OFF), measured=measured)
+        sv.valet._set_value(mapping.valet(_dig(st, "drive_mode")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
         sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
                                               measured=measured)

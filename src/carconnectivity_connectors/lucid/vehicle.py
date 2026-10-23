@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING
 
 from enum import Enum
 
-from carconnectivity.attributes import BooleanAttribute, EnumAttribute, FloatAttribute, SpeedAttribute, TemperatureAttribute
+from carconnectivity.attributes import BooleanAttribute, DurationAttribute, EnergyAttribute, EnumAttribute, FloatAttribute, SpeedAttribute, \
+    StringAttribute, TemperatureAttribute
 from carconnectivity.commands import GenericCommand
 from carconnectivity.doors import Doors
 from carconnectivity.errors import SetterError
-from carconnectivity.units import Speed, Temperature
+from carconnectivity.units import Energy, Speed, Temperature
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
 
 if TYPE_CHECKING:
@@ -77,6 +78,10 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.charge_port: EnumAttribute[Doors.OpenState] = EnumAttribute(name="charge_port", parent=self, value_type=Doors.OpenState,
                                                                          tags={'connector_custom'})
         self.battery_preconditioning: BooleanAttribute = BooleanAttribute(name="battery_preconditioning", parent=self, tags={'connector_custom'})
+        # Keyless driving: the car drives with no key present while it is on. Valet is
+        # read off the drive mode; nothing in the API sets it.
+        self.keyless_driving: BooleanAttribute = BooleanAttribute(name="keyless_driving", parent=self, tags={'connector_custom'})
+        self.valet: BooleanAttribute = BooleanAttribute(name="valet", parent=self, tags={'connector_custom'})
         self.max_ac: BooleanAttribute = BooleanAttribute(name="max_ac", parent=self, tags={'connector_custom'})
         self.creature_comfort: BooleanAttribute = BooleanAttribute(name="creature_comfort", parent=self, tags={'connector_custom'})
         self.steering_wheel_heater: EnumAttribute[ClimateLevel] = EnumAttribute(name="steering_wheel_heater", parent=self, value_type=ClimateLevel,
@@ -87,6 +92,41 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
             name: EnumAttribute(name=name, parent=self, value_type=ClimateLevel, tags={'connector_custom'})
             for name in ("seat_heat_driver", "seat_vent_driver", "seat_heat_front_passenger", "seat_vent_front_passenger",
                          "seat_heat_rear_left", "seat_heat_rear_center", "seat_heat_rear_right")}
+        # 0.4.0. The energy the car's own meter says this charging session has added; set
+        # only while charging. The model's Charging has no slot for it.
+        self.charge_session_energy: EnergyAttribute = EnergyAttribute(name="charge_session_energy", parent=self, unit=Energy.KWH, precision=0.01,
+                                                                      minimum=0.0, tags={'connector_custom'})
+        # What the alarm and Sentry are actually doing, beside the modes above: the alarm going
+        # off and why, why Sentry is paused when the car gives a reason, and whether it has a
+        # drive to record to. Then the two occupant warnings and the key fob's battery.
+        self.alarm_status: EnumAttribute[AlarmStatus] = EnumAttribute(name="alarm_status", parent=self, value_type=AlarmStatus, tags={'connector_custom'})
+        self.sentry_inactive_reason: EnumAttribute[SentryInactiveReason] = EnumAttribute(name="sentry_inactive_reason", parent=self,
+                                                                                         value_type=SentryInactiveReason, tags={'connector_custom'})
+        self.sentry_usb_drive_connected: BooleanAttribute = BooleanAttribute(name="sentry_usb_drive_connected", parent=self, tags={'connector_custom'})
+        self.living_object_detection: EnumAttribute[LivingObjectDetection] = EnumAttribute(name="living_object_detection", parent=self,
+                                                                                           value_type=LivingObjectDetection, tags={'connector_custom'})
+        self.unattended_occupant_detection: EnumAttribute[UnattendedOccupantDetection] = EnumAttribute(
+            name="unattended_occupant_detection", parent=self, value_type=UnattendedOccupantDetection, tags={'connector_custom'})
+        self.keyfob_battery_low: BooleanAttribute = BooleanAttribute(name="keyfob_battery_low", parent=self, tags={'connector_custom'})
+        # Gps.elevation exactly as sent, with no unit: it is not metres, feet, decimetres or
+        # centimetres, so it is not position.altitude. Published for calibration.
+        self.gps_elevation_raw: FloatAttribute = FloatAttribute(name="gps_elevation_raw", parent=self, tags={'connector_custom'})
+        # BatteryState.battery_health_level as the car sends it. Not named or scaled as a state
+        # of health: the proto does not say what it measures, and no car has been read yet.
+        # The update that is waiting: its version, how long it takes to install, and Lucid's
+        # release notes for it (text and link), fetched once per version.
+        self.software_update_version: StringAttribute = StringAttribute(name="software_update_version", parent=self, tags={'connector_custom'})
+        self.software_update_install_time: DurationAttribute = DurationAttribute(name="software_update_install_time", parent=self,
+                                                                                 tags={'connector_custom'})
+        self.software_update_release_notes: StringAttribute = StringAttribute(name="software_update_release_notes", parent=self,
+                                                                              tags={'connector_custom'})
+        self.software_update_release_notes_url: StringAttribute = StringAttribute(name="software_update_release_notes_url", parent=self,
+                                                                                  tags={'connector_custom'})
+        # Every version the car has installed, oldest first, as JSON text:
+        # [{"version": "3.1.51", "at": "2025-12-19T10:00:00Z"}, ...] with the time in UTC.
+        # Read from Lucid's OTA history once, and again when the car's version changes.
+        self.software_history: StringAttribute = StringAttribute(name="software_history", parent=self, tags={'connector_custom'})
+        self.battery_health_level: FloatAttribute = FloatAttribute(name="battery_health_level", parent=self, precision=0.01, tags={'connector_custom'})
 
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):
@@ -109,6 +149,56 @@ class ClimateLevel(Enum):
 
     def __str__(self) -> str:
         return self.value
+
+
+class _Named(Enum):
+    """A state the connector publishes in its own words, printed as its value."""
+    def __str__(self) -> str:
+        return self.value
+
+
+class AlarmStatus(_Named):
+    """What the security alarm is doing (AlarmStatus): armed and quiet, or going off and why."""
+    DISARMED = 'disarmed'
+    ARMED = 'armed'
+    PRE_ALARM = 'pre-alarm'
+    TILT = 'tilt'
+    SHOCK = 'shock'
+    INTRUSION = 'intrusion'
+    PANIC = 'panic'
+
+
+class SentryInactiveReason(_Named):
+    """Why Sentry is not recording, from SentryActiveState's inactive_reason_* flags."""
+    LOW_BATTERY = 'low-battery'
+    UPDATING = 'updating'
+    OCCUPIED = 'occupied'
+    AT_HOME = 'at-home'
+    AT_WORK = 'at-work'
+    USB_FULL = 'usb-full'
+    USB_ERROR = 'usb-error'
+    TOW_MODE = 'tow-mode'
+    CAMERA_ERROR = 'camera-error'
+    UNATTENDED_OCCUPANT = 'unattended-occupant'
+    CREATURE_COMFORT = 'creature-comfort'
+
+
+class LivingObjectDetection(_Named):
+    """BodyState.living_object_detection_status: a child or pet left in the car, by warning level."""
+    DISABLED = 'disabled'
+    NOT_ACTIVE = 'not-active'
+    LEVEL_1 = 'level-1'
+    LEVEL_2 = 'level-2'
+    LEVEL_3 = 'level-3'
+
+
+class UnattendedOccupantDetection(_Named):
+    """BodyState.unattended_occupant_detection_status, by stage."""
+    NO_REQUEST = 'no-request'
+    STAGE_1 = 'stage-1'
+    STAGE_2 = 'stage-2'
+    STAGE_3 = 'stage-3'
+    FAULT = 'fault'
 
 
 class ChoiceCommand(GenericCommand):

@@ -28,6 +28,7 @@ class FakeAPI:
     def __init__(self):
         self.power = 3  # ACCESSORY: awake
         self.charge_state = None
+        self.config = {}  # VehicleConfig fields beyond identity: the capability flags
         self.calls = []
         self.fail_with = None
         self.hang = False
@@ -53,7 +54,7 @@ class FakeAPI:
         self.calls.append(("fetch_vehicles", ()))
         await self._busy()
         state = SimpleNamespace(last_updated_ms=1_700_000_000_000, power=self.power, charging=SimpleNamespace(charge_state=self.charge_state))
-        return [SimpleNamespace(vehicle_id="vid-1", config=SimpleNamespace(vin=VIN, nickname="Alpha", model=2), state=state)]
+        return [SimpleNamespace(vehicle_id="vid-1", config=SimpleNamespace(vin=VIN, nickname="Alpha", model=2, **self.config), state=state)]
 
     async def close(self):
         pass
@@ -530,6 +531,33 @@ def test_halo_secure(rig, name, value, method):
     assert rig.api.calls == [(method, ("vid-1",))]
 
 
+@pytest.mark.parametrize("value,action", [("on", 1), ("off", 2)])
+def test_keyless_driving_sends_the_request_the_library_has_no_call_for(rig, value, action):
+    pytest.importorskip("lucidmotors")
+    sent = []
+
+    async def keyless(request):
+        sent.append(request)
+        await rig.api._record("KeylessDrivingAction", request.vehicle_id, request.action)
+
+    rig.api._vehicle_service = SimpleNamespace(KeylessDrivingAction=keyless)
+    rig.vehicle.commands.commands["keyless-driving"].value = value
+    assert rig.api.calls == [("KeylessDrivingAction", ("vid-1", action))]
+    assert type(sent[0]).__name__ == "KeylessDrivingActionRequest"
+
+
+def test_keyless_driving_wakes_a_sleeping_car_first(rig):
+    pytest.importorskip("lucidmotors")
+
+    async def keyless(request):
+        await rig.api._record("KeylessDrivingAction", request.vehicle_id)
+
+    rig.api._vehicle_service = SimpleNamespace(KeylessDrivingAction=keyless)
+    _poll_sees(rig, 1)
+    rig.vehicle.commands.commands["keyless-driving"].value = "on"
+    assert rig.api.names() == ["wakeup_vehicle", "KeylessDrivingAction"]
+
+
 def test_a_sentry_alarm_can_only_be_silenced(rig):
     with pytest.raises(CommandError, match="off"):
         rig.vehicle.commands.commands["sentry-alarm"].value = "on"
@@ -617,6 +645,56 @@ def test_climate_levels_out_of_range_never_reach_the_car(rig, name, value):
     with pytest.raises(SetterError):
         rig.vehicle.climatization.commands.commands[name].value = value
     assert rig.api.calls == []
+
+
+# -- 0.4.0: commands the car's config says it is not fitted for are refused before sending --
+# Availability enums: 0 unknown, 1 unavailable, 2 available. RearSeatConfig 2 is six seats.
+@pytest.mark.parametrize(
+    "config,name,value",
+    [
+        ({"front_seats_ventilation": 1}, "seat-climate", "driver vent low"),
+        ({"front_seats_heating": 1}, "seat-climate", "front-passenger heat high"),
+        ({"second_row_heated_seats": 1}, "seat-climate", "rear-left heat low"),
+        ({"rear_seat_config": 2}, "seat-climate", "rear-center heat low"),
+        ({"heated_steering_wheel": 1}, "steering-wheel-heater", "high"),
+    ],
+)
+def test_a_control_the_car_says_it_lacks_is_refused_before_sending(rig, config, name, value):
+    rig.api.config = config
+    _poll_sees(rig, 3)
+    with pytest.raises(CommandError, match="Not sent: this car"):
+        rig.vehicle.climatization.commands.commands[name].value = value
+    assert rig.api.calls == []
+
+
+@pytest.mark.parametrize(
+    "config,name,value",
+    [
+        ({"front_seats_ventilation": 0, "front_seats_heating": 2}, "seat-climate", "driver vent low"),  # unknown is not unavailable
+        ({"front_seats_ventilation": 1}, "seat-climate", "driver heat low"),  # no vent is not no heat
+        ({"rear_seat_config": 2}, "seat-climate", "rear-right heat low"),  # six seats still have a right one
+        ({"rear_seat_config": 3}, "seat-climate", "rear-center heat low"),
+        ({"heated_steering_wheel": 0}, "steering-wheel-heater", "high"),
+    ],
+)
+def test_a_car_that_has_it_or_has_not_said_keeps_the_control(rig, config, name, value):
+    rig.api.config = config
+    _poll_sees(rig, 3)
+    rig.vehicle.climatization.commands.commands[name].value = value
+    assert len(rig.api.calls) == 1
+
+
+def test_a_gas_strut_frunk_opens_but_is_not_closed_remotely(rig):
+    rig.api.config = {"frunk_strut": 1}
+    _poll_sees(rig, 3)
+    with pytest.raises(CommandError, match="gas strut"):
+        rig.vehicle.doors.commands.commands["frunk"].value = "close"
+    rig.vehicle.doors.commands.commands["frunk"].value = "open"
+    assert rig.api.names() == ["frunk_open"]
+    rig.api.config = {"frunk_strut": 2}
+    _poll_sees(rig, 3)
+    rig.vehicle.doors.commands.commands["frunk"].value = "close"
+    assert rig.api.names() == ["frunk_close"]
 
 
 # -- 0.3.0: charging -----------------------------------------------------------------

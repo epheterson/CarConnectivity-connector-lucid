@@ -119,6 +119,19 @@ def test_no_window_block_is_unknown_not_all_closed(vehicle):
     assert vehicle.windows.open_state.value is Windows.OpenState.UNKNOWN
 
 
+def test_a_window_that_cannot_say_keeps_the_summary_from_saying_closed(vehicle):
+    """A close with three windows mid-travel read back as closed: the driver's said
+    FULLY_CLOSED and the others UNKNOWN, and only open ones counted against closed."""
+    from carconnectivity.windows import Windows
+
+    wp = SimpleNamespace(left_front=1, left_rear=6, right_front=0, right_rear=6)
+    Connector._apply_windows(vehicle, SimpleNamespace(body=SimpleNamespace(window_position=wp)), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.open_state.value is Windows.OpenState.UNKNOWN
+    wp.right_rear = 5
+    Connector._apply_windows(vehicle, SimpleNamespace(body=SimpleNamespace(window_position=wp)), datetime.now(tz=timezone.utc))
+    assert vehicle.windows.open_state.value is Windows.OpenState.OPEN, "one down is down, whatever the rest say"
+
+
 def test_plug_state_is_published_with_the_charge(vehicle):
     from carconnectivity.charging import ChargingConnector as C
 
@@ -182,6 +195,18 @@ def test_halo_secure_state_is_published(vehicle):
     st.sentry_state.enhanced_deterrence_state, st.alarm.mode = 2, 0
     Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
     assert vehicle.enhanced_deterrence.value is False and vehicle.alarm.value is None
+
+
+def test_keyless_driving_and_valet_are_published(vehicle):
+    st = SimpleNamespace(keyless_driving=1, drive_mode=4)
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.keyless_driving.value is True and vehicle.valet.value is True
+    st.keyless_driving, st.drive_mode = 2, 1
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.keyless_driving.value is False and vehicle.valet.value is False
+    st.keyless_driving, st.drive_mode = 0, 0
+    Connector._apply_controls(vehicle, st, datetime.now(tz=timezone.utc))
+    assert vehicle.keyless_driving.value is None and vehicle.valet.value is None, "0 is the car not saying"
 
 
 def test_charge_port_door_and_headlights_are_published(vehicle):

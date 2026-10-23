@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.0 (2026-10-22)
+
+### Added
+- **More of what the car reports, read-only.** Every field below is read off the protobuf's names. One read-only reading of a parked, unplugged Gravity (2026-10-14) settled their zero and sentinel cases and showed two units to be unknown (see Not added); none has been seen while driving, charging or with an update waiting. Each is unknown when the car leaves it out, sends proto3's 0 or a sentinel, rather than a guess. Standard CarConnectivity slots are used wherever one exists. The README's "What else it reads" table lists them all.
+  - Charging: `charging.estimated_date_reached` from the minutes the car says remain (while charging; 65535, which a parked Gravity sends, is "no estimate" and reads unknown, as it does for the update's install time), `charging.connector.lock_state` from the cable latch (only with a cable in), and the car's own session meter as `charge_session_energy` (kWh), set only while the car is charging and the meter reads above zero: a parked Gravity sends 0.0, and so does a car that leaves the field out.
+  - Security: `alarm_status` (the alarm going off, and why: tilt, shock, intrusion, panic), `sentry_inactive_reason` (why Sentry is paused, when the car gives a reason; its `is_active` flag is not published, since an armed, idle Gravity reports it false), `sentry_usb_drive_connected`, `living_object_detection` and `unattended_occupant_detection` (a child or pet left in the car, by level), and `keyfob_battery_low`.
+  - Climate: defrost and the rear window heater fill the standard `window_heatings`, the state the defrost command had none of.
+  - Battery: `battery_health_level`, the car's raw figure, published under the proto's name; it is probably a state of health, but nothing says so.
+  - Software, only while the car's update flag says AVAILABLE: the waiting version as `software_update_version`, its install time as `software_update_install_time`, and Lucid's release notes for it as `software_update_release_notes` and `software_update_release_notes_url`. The notes are an Air's only: the library can ask only for the Air's document type, so a Gravity, or a car that does not say its model, gets none rather than another car's. They are requested once per waiting version and kept; a failed request is tried again an hour later, never on the next poll, and never fails the poll.
+- **Software history** as `software_history`: every version the car has installed and when, oldest first, from Lucid's OTA version history (JSON text of version and UTC time; the entries' build names carry other cars' VINs and are never read). Read once, then again when the car's reported version changes or after a day, never on each poll; a failed read is tried again in an hour and never fails the poll. A version listed again within a day of its first install keeps the first.
+- **Keyless driving**, behind `"commands": true`: a `keyless-driving` on/off command (the app's Keyless Drive: the car drives with no key in it while on), sent as the library's own calls are, since the library has the request but no call for it. The car's state reads as `keyless_driving`. Checked on a Gravity (2026-10-21): it turns on when the car is locked with no key in reach; with a key present the car declines and the app greys the control out.
+- **Valet** as `valet`, read off the drive mode (unknown when the car does not say). Read only: nothing in the API sets it.
+- **Commands the car is not fitted for are refused before sending**, by the car's own config: seat heat or ventilation it lacks, the rear centre seat on a six-seat car, the steering wheel heater, and a remote frunk close on a gas strut. A car that does not say keeps every control.
+
+### Not added
+- **Altitude.** `gps.elevation` waits on a known unit: a real Gravity sent 8932 at a spot where other cars record 123 m, which is not metres, feet, decimetres or centimetres. `position.altitude` stays empty until the unit is settled; the raw value is published as the unitless `gps_elevation_raw` so it can be calibrated against known heights.
+- **Range added this session.** `charging.charge_session_mi` waits on a known unit: it may be miles, as named, or km, as Lucid's other range figures are.
+
+### Fixed
+- **`software_update_available` no longer reads false when the car has not said.** The proto's `UpdateAvailability` is 0 unknown and 1 available, with no "none waiting", and proto3 sends 0 for a missing field; it was published as false. It is now true or unknown.
+- **The windows summary no longer says closed while a window cannot say.** A close sent with three windows down read back as closed in ten seconds while they were still down: the driver's window reported fully closed and the rest unknown, and only open windows counted against closed. A window that reads unknown now keeps the summary unknown.
+- **A missing GPS block is no longer a position.** A real message without one reads 0.0, 0.0, which was published as the car's location.
+
 ## 0.3.1 (2026-10-14)
 
 ### Added
