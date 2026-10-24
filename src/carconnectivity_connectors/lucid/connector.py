@@ -74,6 +74,17 @@ RELEASE_NOTES_RETRY_S = 3600.0
 # The car takes a moment to report what a command did; poll once soon after rather
 # than waiting out the interval. One extra read, which never wakes the car.
 REFRESH_AFTER_COMMAND_S = 6.0
+# A sleeping car is read this often unless the config says otherwise. Its next change is a
+# wake, which shows on the next read; the token (300 s) is refreshed once per such poll.
+SLEEP_INTERVAL_DEFAULT_S = 240
+SLEEP_INTERVAL_MAX_S = 900
+# After a command the car is read at the awake interval for this long, whatever it last
+# reported: a wake may not show on the early poll, and the next poll must not wait out a
+# sleeper's interval.
+AFTER_COMMAND_AWAKE_S = 300.0
+# The longest a caller may ask for the awake interval by `fast_poll`, for a car that looks
+# asleep (a garage door opening, someone walking up to it).
+FAST_POLL_MAX_S = 600
 # The OTA history is read once, then again after this long, or when the car's version stops
 # matching its newest entry (a new install the history had not listed yet).
 OTA_HISTORY_REFRESH_S = 86400.0
@@ -108,6 +119,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # Cuts the poller's wait short when a command wants fresh state; shutdown sets it
         # too, so that wait ends with the stop event.
         self._poll_now = threading.Event()
+        # Until this monotonic time a sleeping car is read at the awake interval anyway:
+        # set by a command and by `fast_poll`. Never earlier than it already was.
+        self._awake_until: float = 0.0
         # The library's Vehicle message per VIN from the latest poll: a command needs its
         # vehicle_id, and its power state says whether the car is asleep.
         self._lucid_vehicles: Dict[str, Any] = {}
@@ -125,6 +139,14 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         self.interval: DurationAttribute = DurationAttribute(name="interval", parent=self, tags={'connector_custom'})
         self.interval.minimum = timedelta(seconds=60)
         self.interval._is_changeable = True  # pylint: disable=protected-access
+        # Writing a number of seconds (0 to FAST_POLL_MAX_S) reads the cars at the awake
+        # interval for that long even if they look asleep, and reads once now. Nothing is sent
+        # to the car, so it is on without `commands`. Reads back as what was last asked.
+        self.fast_poll: DurationAttribute = DurationAttribute(name="fast_poll", parent=self, tags={'connector_custom'})
+        self.fast_poll.minimum = timedelta(seconds=0)
+        self.fast_poll.maximum = timedelta(seconds=FAST_POLL_MAX_S)
+        self.fast_poll._add_on_set_hook(self._on_fast_poll)  # pylint: disable=protected-access
+        self.fast_poll._is_changeable = True  # pylint: disable=protected-access
 
         LOG.info("Loading lucid connector with config %s", config_remove_credentials(config))
 
@@ -155,6 +177,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 raise ValueError('Driving interval must be at least 15 seconds')
             if self.active_config['driving_interval'] > self.active_config['interval']:
                 raise ValueError('Driving interval must not be longer than interval')
+
+        self.active_config['sleep_interval'] = self._sleep_interval(config, self.active_config['interval'])
 
         # Commands are off unless asked for, and only a real boolean asks: the string
         # "false" is truthy, and reading it as yes would unlock a car someone meant to
@@ -195,7 +219,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                     self.last_update._set_value(value=datetime.now(tz=timezone.utc))  # pylint: disable=protected-access
                     if self.interval.value is not None:
                         interval = self.interval.value.total_seconds()
-                    interval = mapping.poll_interval(self._vehicle_states(), interval, self.active_config['driving_interval'])
+                    interval = self._next_interval(interval)
                 except Exception:
                     self.connection_state._set_value(value=ConnectionState.ERROR)  # pylint: disable=protected-access
                     if self.interval.value is not None:
@@ -228,6 +252,43 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 self._poll_now.clear()
         self._session.close()
         self.connection_state._set_value(value=ConnectionState.DISCONNECTED)  # pylint: disable=protected-access
+
+    @staticmethod
+    def _sleep_interval(config: Dict, interval: int) -> int:
+        """How often a car that is asleep is read. Its state cannot change unseen, so this is
+        the longest a wake goes unnoticed. Never shorter than `interval`: there is nothing
+        to be gained by reading a sleeper more often than a car that is up."""
+        sleep = max(SLEEP_INTERVAL_DEFAULT_S, interval)
+        if 'sleep_interval' in config:
+            sleep = int(config['sleep_interval'])
+            if sleep < interval:
+                raise ValueError('Sleep interval must not be shorter than interval')
+            if sleep > SLEEP_INTERVAL_MAX_S:
+                raise ValueError(f'Sleep interval must be at most {SLEEP_INTERVAL_MAX_S} seconds')
+        return sleep
+
+    def _next_interval(self, idle_s: float) -> float:
+        """The wait after a poll that got through, and the token's cue to refresh for it."""
+        awake = time.monotonic() < self._awake_until
+        sleep_s = None if awake else max(float(self.active_config['sleep_interval']), idle_s)
+        wait = mapping.poll_interval(self._vehicle_states(), idle_s, self.active_config['driving_interval'], sleep_s)
+        self._session.plan_next_poll(wait)
+        return wait
+
+    def _stay_awake(self, seconds: float) -> None:
+        """Read at the awake interval for `seconds` from now, even a car that looks asleep."""
+        self._awake_until = max(self._awake_until, time.monotonic() + seconds)
+
+    def _on_fast_poll(self, attribute: GenericAttribute, value: Any) -> Any:  # pylint: disable=unused-argument
+        seconds = value.total_seconds() if isinstance(value, timedelta) else value
+        if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 <= seconds <= FAST_POLL_MAX_S:
+            raise SetterError(f'fast_poll must be from 0 to {FAST_POLL_MAX_S} seconds, not {value!r}')
+        if seconds == 0:
+            self._awake_until = 0.0
+        else:
+            self._stay_awake(seconds)
+        self._poll_now.set()
+        return value
 
     def _vehicle_states(self) -> list:
         """The state of each vehicle this connector manages, for choosing the next interval."""
@@ -457,6 +518,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             LOG.error('Command %s for vehicle ...%s failed: %s', what, vin[-4:], err)
             raise error(f'{what} failed: {err}') from err
         LOG.info('Command %s for vehicle ...%s accepted', what, vin[-4:])
+        self._stay_awake(AFTER_COMMAND_AWAKE_S)
         timer = threading.Timer(REFRESH_AFTER_COMMAND_S, self._poll_now.set)
         timer.daemon = True
         timer.start()

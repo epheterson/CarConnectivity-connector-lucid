@@ -38,7 +38,8 @@ Mint one once with the library's login example (username + password, interactive
                 "config": {
                     "refresh_token_file": "~/.config/lucid-token.json",
                     "interval": 60,
-                    "driving_interval": 15
+                    "driving_interval": 15,
+                    "sleep_interval": 240
                 }
             }
         ]
@@ -146,13 +147,13 @@ What one account costs Lucid's servers, with the default config and one or more 
 
 | Request | When | Per hour |
 |---|---|---|
-| Vehicle list (all state) | every `interval` (default and minimum 60 s); every `driving_interval` while a car drives | 60 parked; up to 240 driving at 15 s |
-| Session refresh | when under 60 s of the 5-minute token remain | about 15 |
+| Vehicle list (all state) | every `sleep_interval` (default 240 s) while every car is asleep; every `interval` (default and minimum 60 s) while one is awake; every `driving_interval` while one drives | 15 asleep; 60 awake; up to 240 driving at 15 s |
+| Session refresh | when the 5-minute token would not last to the next poll: with `sleep_interval` over about 150 s, once per sleeping poll; awake, about every fourth poll | 15 asleep; about 15 awake |
 | OTA version history | once per car, again when its version changes, or daily; an hour after a failure | under 1 |
 | Release notes | once per waiting version (Air only); an hour after a failure | under 1 |
 | Commands | only when sent, plus one early poll 6 s later | as used |
 
-Polls never wake the car; only commands do. A rate-limit refusal backs off from 5 s doubling to 15 minutes. Run one client per account: a second logger or integration on the same login shares this allowance.
+Polls never wake the car; only commands do. A simulated day (a commute each way, two parked-awake stretches and two hours charging, a fake clock and API, `test/test_polling.py`) costs about 1,100 requests against about 1,900 at a flat 60 s. A command, or a write to the connector's `fast_poll` (below), puts a sleeping car back on the awake interval at once. A rate-limit refusal backs off from 5 s doubling to 15 minutes. Run one client per account: a second logger or integration on the same login shares this allowance.
 
 ## Session lifetime — read this if you run it long
 
@@ -160,6 +161,10 @@ Polls never wake the car; only commands do. A rate-limit refusal backs off from 
 
 Both are the spacing between polls, not the pause after one. A fetch of a sleeping car returns in about a tenth of a second, but Lucid has to reach a car that is awake and driving, and that fetch takes on the order of fifteen seconds — so waiting the full interval *after* it made a 15 s setting a 31 s cycle. The wait is the interval less however long the fetch took, and the fetch time is logged at debug level if you want to see it.
 
+**Sleeping cars.** Lucid reports the car's power state; any sleep or cloud state (and not a charging car, whatever its power state says) counts as asleep. While every car on the account is asleep the poll waits `sleep_interval` (default 240 s, at least `interval`, at most 900 s). A sleeping car cannot change unseen: its next change is a wake, and a wake shows on the first read after it, so the cost is that a wake, or the first metres of a drive that starts from sleep, can go unseen for up to `sleep_interval`. One car awake or driving keeps the whole account at its interval. Nothing here wakes the car.
+
+**Asking for fast polling.** Writing a number of seconds (0 to 600) to the connector's `fast_poll` attribute reads at once and then holds the awake interval for that long even if the cars look asleep; 0 cancels it. Something that knows a car is about to be used, a garage door opening, can write it through any CarConnectivity plugin that sets a changeable attribute, as it would the charge limit (the attribute is `connectors/lucid/fast_poll`; not yet tried through the REST plugin). It sends nothing to the car, so it needs no `"commands": true`. A command also holds the awake interval for five minutes after it is sent, since the early poll may not yet see the wake.
+
 **One account, one client.** Lucid rate-limits per account, not per connection, and it says nothing useful when it does: `RESOURCE_EXHAUSTED` with an empty body, no quota and no retry-after. Running a second logger against the same credentials — another CarConnectivity instance, a Home Assistant integration, a bridge of your own — competes for the same allowance, and the refusals arrive mid-drive when both are polling hardest. When one does arrive the connector waits 5 s, then 10, 20, 40 and so on to a 15-minute ceiling, and drops back to 5 s as soon as a poll succeeds.
 
-A Lucid session's bearer token lasts **five minutes** and the server enforces that to the second. The connector refreshes only when under 60 s remain, never on every poll: the refresh endpoint is rate-limited, back-to-back refreshes return the same session anyway, and a client that refreshed per poll was throttled thousands of times before this was measured. Keep `interval` under 240 s or raise the refresh margin.
+A Lucid session's bearer token lasts **five minutes** and the server enforces that to the second. The connector refreshes only when under 60 s remain, never on every poll: the refresh endpoint is rate-limited, back-to-back refreshes return the same session anyway, and a client that refreshed per poll was throttled thousands of times before this was measured. The margin is the wait to the next poll plus 30 s (never under 60 s), so a longer interval is refreshed in time rather than read on a dead token. A 300 s token cannot span two polls more than about 150 s apart, so a sleeping poll is a refresh and a read; that is why `sleep_interval` is not shorter by default.

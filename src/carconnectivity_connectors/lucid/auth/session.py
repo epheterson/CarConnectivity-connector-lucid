@@ -10,7 +10,11 @@ Measured 2026-09-03 on a Gravity, not assumed:
     rate-limited (RESOURCE_EXHAUSTED), which a naive client hit 3,691 times in
     24 days.
 
-So: refresh only when under REFRESH_MARGIN_S remain, and never on every poll.
+So: refresh only when the token would not outlast the next poll, and never on every poll.
+A token that has 60 s left now and is read again in 240 s is dead when it is read, so the
+margin is the longer of REFRESH_MARGIN_S and the wait to the next poll plus REFRESH_SLACK_S
+(see plan_next_poll). With a wait over about 150 s that means one refresh per poll, since
+the 300 s token cannot span two of them.
 """
 from __future__ import annotations
 
@@ -26,7 +30,8 @@ from carconnectivity.errors import AuthenticationError, CarConnectivityError, Re
 
 LOG = logging.getLogger("carconnectivity.connectors.lucid.auth")
 
-REFRESH_MARGIN_S = 60.0  # must exceed the poll interval; 60 s min interval -> refresh has 2x margin on a 300 s token
+REFRESH_MARGIN_S = 60.0  # the least that must remain; the poller raises it to cover a longer wait (plan_next_poll)
+REFRESH_SLACK_S = 30.0  # added to the wait to the next poll: a fetch of a driving car takes ~15 s
 WAKE_SETTLE_S = 8.0  # a car that was asleep needs a moment after WakeupVehicle before it takes a command
 # The library sets no deadline on a command. Without one a call Lucid never answers holds
 # the session lock, and the poller with it, for good. It covers the whole command, login included.
@@ -62,7 +67,7 @@ def translate_api_error(exc: BaseException) -> Exception:
     return RetrievalError(f"Lucid API error: {exc}")
 
 
-class LucidSession:
+class LucidSession:  # pylint: disable=too-many-instance-attributes
     """Owns the asyncio loop and the LucidAPI. The poller calls it from the connector's
     background thread; commands arrive on other threads (the REST or MQTT plugin's). Both
     go through `run()`, which serialises them: a loop cannot run two coroutines from two
@@ -76,6 +81,7 @@ class LucidSession:
         self._lock = threading.RLock()
         self._wake_settle_s = WAKE_SETTLE_S
         self._command_timeout_s = COMMAND_TIMEOUT_S
+        self._refresh_margin_s = REFRESH_MARGIN_S
 
     # -- lifecycle -----------------------------------------------------------
     def start(self) -> None:
@@ -111,6 +117,11 @@ class LucidSession:
         finally:
             self._lock.release()
 
+    def plan_next_poll(self, wait_s: float) -> None:
+        """Tell the session how long until it is used again, so the token is refreshed when
+        it would not last that long and not otherwise."""
+        self._refresh_margin_s = max(REFRESH_MARGIN_S, wait_s + REFRESH_SLACK_S)
+
     # -- auth ----------------------------------------------------------------
     def _make_api(self):
         if self._api_factory is not None:
@@ -134,7 +145,7 @@ class LucidSession:
             self._api = api
             LOG.info("Lucid session established")
         remaining = self._api.session_time_remaining.total_seconds()
-        if remaining < REFRESH_MARGIN_S:
+        if remaining < self._refresh_margin_s:
             LOG.debug("refreshing Lucid session (%.0fs remaining)", remaining)
             try:
                 await self._api.authentication_refresh()

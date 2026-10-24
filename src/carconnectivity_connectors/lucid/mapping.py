@@ -644,15 +644,25 @@ def speed_kmh(speed: Optional[float]) -> Optional[float]:
 DRIVING_STATES = (GenericVehicle.State.DRIVING, GenericVehicle.State.IGNITION_ON)
 
 
-def poll_interval(states: Iterable[Optional[GenericVehicle.State]], idle_s: float, driving_s: float) -> float:
+def poll_interval(states: Iterable[Optional[GenericVehicle.State]], idle_s: float, driving_s: float, sleep_s: Optional[float] = None) -> float:
     """How long to wait before the next poll.
 
-    A minute is plenty for a car asleep on a driveway and far too coarse for one moving:
+    A minute is plenty for a car awake on a driveway and far too coarse for one moving:
     at 60 s a drive is a handful of points and a straight line between them, and speed
     read off consecutive fixes is an average over a mile. Poll faster only while a car is
     actually going somewhere, which is a small share of any day.
+
+    A car that is asleep (OFFLINE here: any sleep or cloud power state, never one that is
+    charging) cannot change unseen: its next change is a wake, and a wake shows on the
+    next read. So when every car is asleep the wait is `sleep_s`, the longest of the three.
+    A car whose state is unknown counts as awake, and no cars at all is not a reason to slow.
     """
-    return driving_s if any(s in DRIVING_STATES for s in states) else idle_s
+    states = list(states)
+    if any(s in DRIVING_STATES for s in states):
+        return driving_s
+    if sleep_s is not None and states and all(s == GenericVehicle.State.OFFLINE for s in states):
+        return sleep_s
+    return idle_s
 
 
 # What to do when Lucid refuses. It says only RESOURCE_EXHAUSTED, with an empty body:
