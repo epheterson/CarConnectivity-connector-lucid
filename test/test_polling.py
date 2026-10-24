@@ -9,7 +9,7 @@ import pytest
 from carconnectivity.carconnectivity import CarConnectivity
 from carconnectivity.errors import SetterError
 from carconnectivity_connectors.lucid import mapping
-from carconnectivity_connectors.lucid.auth.session import LucidSession, REFRESH_MARGIN_S, REFRESH_SLACK_S
+from carconnectivity_connectors.lucid.auth.session import LucidSession
 from carconnectivity_connectors.lucid.connector import Connector, FAST_POLL_MAX_S
 from carconnectivity.vehicle import GenericVehicle
 
@@ -71,15 +71,12 @@ def _sleeping(connector, monkeypatch, states):
     monkeypatch.setattr(connector, "_vehicle_states", lambda: states)
 
 
-def test_the_wait_follows_the_car_and_the_token_is_planned_for_it(tmp_path, monkeypatch):
+def test_the_wait_follows_the_car(tmp_path, monkeypatch):
     connector, cc = _connector(tmp_path, {"sleep_interval": 240})
     _sleeping(connector, monkeypatch, [ASLEEP])
     assert connector._next_interval(60) == 240
-    assert connector._session._refresh_margin_s == 240 + REFRESH_SLACK_S
     _sleeping(connector, monkeypatch, [PARKED])
     assert connector._next_interval(60) == 60
-    assert connector._session._refresh_margin_s == 60 + REFRESH_SLACK_S
-    assert connector._session._refresh_margin_s >= REFRESH_MARGIN_S
     cc.shutdown()
 
 
@@ -170,7 +167,7 @@ def _state_at(t, day):
     return next((s for a, b, s in day if a <= t < b), ASLEEP)
 
 
-def _simulate(tmp_path, sleep_s, day=None, plan=True):
+def _simulate(tmp_path, sleep_s, day=None):
     """One car through DAY, polled as the connector polls; returns requests and the worst
     time between the car waking and a poll seeing it."""
     day = DAY if day is None else day
@@ -193,25 +190,23 @@ def _simulate(tmp_path, sleep_s, day=None, plan=True):
         if not truly_awake:
             woke_at = None
         wait = mapping.poll_interval([seen], 60, 15, sleep_s)
-        if plan:
-            session.plan_next_poll(wait)
         clock[0] += wait
     session.close()
     return api.fetches + api.refreshes, api.fetches, api.refreshes, worst_lag
 
 
-def test_a_simulated_day_default_config_costs_what_it_did_and_opting_in_costs_less(tmp_path, capsys):
-    """Before: 60 s awake or asleep, 15 s driving, the refresh margin a flat 60 s. Default
-    config now: the same waits, the margin the wait plus 30 s. Opted in: a sleeper every 240 s."""
-    for sub in "abc":
+def test_a_simulated_day_default_config_costs_exactly_what_it_did_and_opting_in_costs_less(tmp_path, capsys):
+    """The token is checked, and refreshed if short, right before every read, so the wait to the
+    next poll does not matter to it and the flat margin serves any interval: the default's day
+    is the old day, request for request. A sleeper every 240 s is the opt-in."""
+    for sub in "ab":
         (tmp_path / sub).mkdir()
-    before = _simulate(tmp_path / "a", None, plan=False)
-    default = _simulate(tmp_path / "b", 60)
-    opted = _simulate(tmp_path / "c", 240)
+    default = _simulate(tmp_path / "a", 60)
+    opted = _simulate(tmp_path / "b", 240)
     with capsys.disabled():
-        for name, r in (("before", before), ("default", default), ("sleep_interval 240", opted)):
+        for name, r in (("default (same as 0.4.0)", default), ("sleep_interval 240", opted)):
             print(f"\n{name}: {r[0]} requests/day ({r[1]} reads + {r[2]} refreshes); worst wake-to-read lag {r[3]:.0f}s")
-    assert abs(default[0] - before[0]) <= before[0] * 0.05, "the default must not change what the connector costs"
+    assert default[:3] == (1910, 1620, 290), "the default must cost exactly what 0.4.0 did"
     assert default[3] == 0, "a wake is read on the first poll after it"
-    assert opted[0] < before[0] * 0.65
+    assert opted[0] < default[0] * 0.65
     assert opted[3] <= 240

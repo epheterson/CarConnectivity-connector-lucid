@@ -267,12 +267,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         return sleep
 
     def _next_interval(self, idle_s: float) -> float:
-        """The wait after a poll that got through, and the token's cue to refresh for it."""
+        """The wait after a poll that got through."""
         awake = time.monotonic() < self._awake_until
         sleep_s = None if awake else max(float(self.active_config['sleep_interval']), idle_s)
-        wait = mapping.poll_interval(self._vehicle_states(), idle_s, self.active_config['driving_interval'], sleep_s)
-        self._session.plan_next_poll(wait)
-        return wait
+        return mapping.poll_interval(self._vehicle_states(), idle_s, self.active_config['driving_interval'], sleep_s)
 
     def _stay_awake(self, seconds: float) -> None:
         """Read at the awake interval for `seconds` from now, even a car that looks asleep."""
