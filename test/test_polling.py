@@ -10,7 +10,7 @@ from carconnectivity.carconnectivity import CarConnectivity
 from carconnectivity.errors import SetterError
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession, REFRESH_MARGIN_S, REFRESH_SLACK_S
-from carconnectivity_connectors.lucid.connector import Connector, FAST_POLL_MAX_S, SLEEP_INTERVAL_DEFAULT_S
+from carconnectivity_connectors.lucid.connector import Connector, FAST_POLL_MAX_S
 from carconnectivity.vehicle import GenericVehicle
 
 ASLEEP, PARKED, DRIVING = GenericVehicle.State.OFFLINE, GenericVehicle.State.PARKED, GenericVehicle.State.DRIVING
@@ -52,10 +52,10 @@ def _connector(tmp_path, config=None):
 
 def test_config_defaults_and_bounds(tmp_path):
     connector, cc = _connector(tmp_path)
-    assert connector.active_config['sleep_interval'] == SLEEP_INTERVAL_DEFAULT_S == 240
+    assert connector.active_config['sleep_interval'] == 60, "unchanged unless asked"
     cc.shutdown()
     connector, cc = _connector(tmp_path, {"interval": 300})
-    assert connector.active_config['sleep_interval'] == 300, "never shorter than the awake interval"
+    assert connector.active_config['sleep_interval'] == 300
     cc.shutdown()
     connector, cc = _connector(tmp_path, {"sleep_interval": 180})
     assert connector.active_config['sleep_interval'] == 180
@@ -72,7 +72,7 @@ def _sleeping(connector, monkeypatch, states):
 
 
 def test_the_wait_follows_the_car_and_the_token_is_planned_for_it(tmp_path, monkeypatch):
-    connector, cc = _connector(tmp_path)
+    connector, cc = _connector(tmp_path, {"sleep_interval": 240})
     _sleeping(connector, monkeypatch, [ASLEEP])
     assert connector._next_interval(60) == 240
     assert connector._session._refresh_margin_s == 240 + REFRESH_SLACK_S
@@ -84,7 +84,7 @@ def test_the_wait_follows_the_car_and_the_token_is_planned_for_it(tmp_path, monk
 
 
 def test_fast_poll_holds_the_awake_interval_and_asks_for_a_read_now(tmp_path, monkeypatch):
-    connector, cc = _connector(tmp_path)
+    connector, cc = _connector(tmp_path, {"sleep_interval": 240})
     _sleeping(connector, monkeypatch, [ASLEEP])
     connector.fast_poll.value = timedelta(seconds=300)
     assert connector._poll_now.is_set(), "the read the caller is waiting for"
@@ -95,7 +95,7 @@ def test_fast_poll_holds_the_awake_interval_and_asks_for_a_read_now(tmp_path, mo
 
 
 def test_fast_poll_expires(tmp_path, monkeypatch):
-    connector, cc = _connector(tmp_path)
+    connector, cc = _connector(tmp_path, {"sleep_interval": 240})
     _sleeping(connector, monkeypatch, [ASLEEP])
     connector.fast_poll.value = timedelta(seconds=30)
     now = [1000.0]
@@ -117,7 +117,7 @@ def test_fast_poll_refuses_what_is_out_of_bounds(tmp_path, bad):
 
 
 def test_a_command_brings_the_awake_interval_back_at_once(tmp_path, monkeypatch):
-    connector, cc = _connector(tmp_path, {"commands": True})
+    connector, cc = _connector(tmp_path, {"commands": True, "sleep_interval": 240})
     _sleeping(connector, monkeypatch, [ASLEEP])
     connector._lucid_vehicles["VIN"] = object()
     vehicle = type("V", (), {"vin": type("A", (), {"value": "VIN"})()})()
@@ -200,18 +200,18 @@ def _simulate(tmp_path, sleep_s, day=None, plan=True):
     return api.fetches + api.refreshes, api.fetches, api.refreshes, worst_lag
 
 
-def test_a_simulated_day_costs_well_under_what_it_did(tmp_path, capsys):
-    """Before: 60 s awake or asleep, 15 s driving, the refresh margin a flat 60 s. After: a
-    sleeper every 240 s. Also without the two charging hours, which stay at the awake interval."""
-    (tmp_path / "a").mkdir()
-    (tmp_path / "b").mkdir()
-    results = {}
-    for name, day in (("with 2 h charging", DAY), ("without charging", DAY[:-1])):
-        results[name] = (_simulate(tmp_path / "a", None, day, plan=False), _simulate(tmp_path / "b", 240, day))
+def test_a_simulated_day_default_config_costs_what_it_did_and_opting_in_costs_less(tmp_path, capsys):
+    """Before: 60 s awake or asleep, 15 s driving, the refresh margin a flat 60 s. Default
+    config now: the same waits, the margin the wait plus 30 s. Opted in: a sleeper every 240 s."""
+    for sub in "abc":
+        (tmp_path / sub).mkdir()
+    before = _simulate(tmp_path / "a", None, plan=False)
+    default = _simulate(tmp_path / "b", 60)
+    opted = _simulate(tmp_path / "c", 240)
     with capsys.disabled():
-        for name, (before, after) in results.items():
-            print(f"\n{name}: requests/day before {before[0]} ({before[1]} reads + {before[2]} refreshes), after {after[0]} "
-                  f"({after[1]} reads + {after[2]} refreshes); worst wake-to-read lag before {before[3]:.0f}s, after {after[3]:.0f}s")
-    for before, after in results.values():
-        assert after[0] < before[0] * 0.6
-        assert after[3] <= 240
+        for name, r in (("before", before), ("default", default), ("sleep_interval 240", opted)):
+            print(f"\n{name}: {r[0]} requests/day ({r[1]} reads + {r[2]} refreshes); worst wake-to-read lag {r[3]:.0f}s")
+    assert abs(default[0] - before[0]) <= before[0] * 0.05, "the default must not change what the connector costs"
+    assert default[3] == 0, "a wake is read on the first poll after it"
+    assert opted[0] < before[0] * 0.65
+    assert opted[3] <= 240

@@ -2,13 +2,15 @@
 
 ## 0.5.0 (Unreleased)
 
+Optional slower polling while the car is asleep; defaults unchanged.
+
 ### Added
-- **`sleep_interval`** (default 240 s, at least `interval`, at most 900): how often the account is read while every car is asleep. A sleeping car cannot change unseen, and a wake shows on the first read after it, so the cost is a wake going unseen for up to this long. A car awake, charging or driving keeps the whole account at `interval` or `driving_interval`; polling never wakes a car.
+- **`sleep_interval`** (default `interval`, so nothing changes unless it is set; at most 900): how often the account is read while every car is asleep. A wake shows on the first read after it, so a drive that starts from sleep is noticed up to this late, its start time and first stretch missed. At 240 a simulated day costs about 1,100 requests instead of about 1,900. A car awake, charging or driving keeps the whole account at `interval` or `driving_interval`; polling never wakes a car.
 - **`fast_poll`**, a writable connector attribute: seconds (0 to 600) to hold the awake interval for a car that looks asleep, with a read right away; 0 cancels. For a caller that knows the car is about to be used, such as a garage door opening. Sends nothing to the car, so it works without `commands`.
-- **A command holds the awake interval for five minutes**, so a wake that the early poll does not yet show cannot send the next poll out to the sleep interval.
+- **A command holds the awake interval for five minutes**, so a wake that the early poll does not yet show cannot send the next poll out to a long sleep interval.
 
 ### Changed
-- **The session refresh covers the wait to the next poll.** It was a flat 60 s of margin, which a wait longer than about 60 s could outlast, leaving a poll to go out on an expired token. The margin is now the wait plus 30 s (never under 60 s). A simulated day (`test/test_polling.py`) costs about 1,100 requests against about 1,900 before; a sleeping poll is a refresh and a read, since the 5-minute token cannot span two polls that far apart.
+- **The session refresh covers the wait to the next poll.** It was a flat 60 s of margin, which a wait much longer than that could outlast, leaving a poll to go out on an expired token. The margin is now the wait plus 30 s (never under 60 s). At the default 60 s it is 90 s, a refresh about every fourth poll as before.
 
 ## 0.4.0 (2026-10-22)
 

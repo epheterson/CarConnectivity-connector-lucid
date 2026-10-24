@@ -74,9 +74,8 @@ RELEASE_NOTES_RETRY_S = 3600.0
 # The car takes a moment to report what a command did; poll once soon after rather
 # than waiting out the interval. One extra read, which never wakes the car.
 REFRESH_AFTER_COMMAND_S = 6.0
-# A sleeping car is read this often unless the config says otherwise. Its next change is a
-# wake, which shows on the next read; the token (300 s) is refreshed once per such poll.
-SLEEP_INTERVAL_DEFAULT_S = 240
+# A sleeping car is read at `interval` unless the config asks for longer, up to this. Its next
+# change is a wake, which shows on the next read; a long wait delays that read, and a drive's start.
 SLEEP_INTERVAL_MAX_S = 900
 # After a command the car is read at the awake interval for this long, whatever it last
 # reported: a wake may not show on the early poll, and the next poll must not wait out a
@@ -257,8 +256,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     def _sleep_interval(config: Dict, interval: int) -> int:
         """How often a car that is asleep is read. Its state cannot change unseen, so this is
         the longest a wake goes unnoticed. Never shorter than `interval`: there is nothing
-        to be gained by reading a sleeper more often than a car that is up."""
-        sleep = max(SLEEP_INTERVAL_DEFAULT_S, interval)
+        to be gained by reading a sleeper more often than a car that is up. Defaults to `interval`."""
+        sleep = interval
         if 'sleep_interval' in config:
             sleep = int(config['sleep_interval'])
             if sleep < interval:
