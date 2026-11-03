@@ -47,6 +47,9 @@ def test_a_real_schedule_message():
     ("off", {"on": False, "start": None, "end": None, "weekdays": None}),
     ("ON", {"on": True, "start": None, "end": None, "weekdays": None}),
     ("23:00-06:30", {"on": True, "start": 1380, "end": 390, "weekdays": None}),
+    ("23:00-", {"on": True, "start": 1380, "end": None, "weekdays": None}),
+    ("-06:30", {"on": True, "start": None, "end": 390, "weekdays": None}),
+    ({"on": True, "start": "23:00"}, {"on": True, "start": 1380, "end": None, "weekdays": None}),
     ({"command": "off"}, {"on": False, "start": None, "end": None, "weekdays": None}),
     ({"on": True, "start": "1:00", "end": "5:30", "weekdays": True}, {"on": True, "start": 60, "end": 330, "weekdays": True}),
     ({"on": False}, {"on": False, "start": None, "end": None, "weekdays": None}),
@@ -55,7 +58,7 @@ def test_what_the_command_accepts(value, expected):
     assert parse_schedule(value) == expected
 
 
-@pytest.mark.parametrize("value", ["", "tomorrow", "25:00-06:00", "23:00-", "23:00-06:61", 5, None, {"on": "yes"}, {"on": True, "start": "23:00"},
+@pytest.mark.parametrize("value", ["", "tomorrow", "25:00-06:00", "-", "23:00-06:61", 5, None, {"on": "yes"},
                                    {"on": True, "stop": "06:00"}, {"start": "23:00", "end": "06:00"}])
 def test_what_it_refuses_before_the_car_sees_it(value):
     with pytest.raises(SetterError):
@@ -66,6 +69,8 @@ def test_a_request_is_wanted_over_held():
     held = mapping.charging_schedule(pb.ChargingSchedule(schedule_on=False, start_time="23:00", end_time="06:00", weekday_on=True))
     assert mapping.schedule_request(held, parse_schedule("on")) == (True, "23:00", "06:00", True)
     assert mapping.schedule_request(held, parse_schedule("00:30-05:00")) == (True, "00:30", "05:00", True)
+    assert mapping.schedule_request(held, parse_schedule("22:00-")) == (True, "22:00", "06:00", True), "only the start changes"
+    assert mapping.schedule_request(held, parse_schedule("-07:15")) == (True, "23:00", "07:15", True), "only the end changes"
     assert mapping.schedule_request(held, parse_schedule({"on": True, "start": "01:00", "end": "02:00", "weekdays": False})) == (True, "01:00", "02:00", False)
 
 
@@ -73,6 +78,8 @@ def test_nothing_to_turn_on_and_a_format_not_known_are_refused():
     never = mapping.charging_schedule(pb.ChargingSchedule())
     with pytest.raises(ValueError, match="holds no schedule times"):
         mapping.schedule_request(never, parse_schedule("on"))
+    with pytest.raises(ValueError, match="holds no schedule times"):
+        mapping.schedule_request(never, parse_schedule("23:00-"))
     assert mapping.schedule_request(never, parse_schedule("23:00-06:00")) == (True, "23:00", "06:00", False)
     odd = mapping.charging_schedule(pb.ChargingSchedule(start_time="11pm", end_time="6am"))
     with pytest.raises(ValueError, match="does not know"):
@@ -195,6 +202,13 @@ def test_the_command_writes_in_the_cars_format_and_reads_it_back(rig):
     connector.fetch_vehicles()
     assert api.reads == 2, "read back at once after a write"
     assert (vehicle.charging_schedule_start.value, vehicle.charging_schedule_end.value) == ("00:30", "05:15")
+
+
+def test_one_end_alone_keeps_the_other(rig):
+    connector, api, cc = rig
+    connector.fetch_vehicles()
+    cc.garage.get_vehicle(VIN).charging.commands.commands["charging-schedule"].value = "-07:15"
+    assert api.calls == [("vid-1", True, "23:00", "07:15", False)]
 
 
 def test_off_keeps_the_times(rig):

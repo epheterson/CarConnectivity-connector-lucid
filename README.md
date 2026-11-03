@@ -77,7 +77,7 @@ Off by default. Without the option the connector creates no command objects at a
 | Steering wheel heater | `climatization/commands/steering-wheel-heater` | `off`, `low`, `medium`, `high` | `steering_wheel_heater_control` |
 | Battery preconditioning | `charging/commands/battery-preconditioning` | `on`, `off` | `battery_precon_on` / `battery_precon_off` |
 | AC current limit | `charging/settings/maximum_current` | whole amps, 8 to 80 | `set_ac_current_limit` |
-| Charging schedule | `charging/commands/charging-schedule` | `off`, `on` (keeps the car's times), `23:00-06:00` (on, with those times), or `{"on": true, "start": "23:00", "end": "06:00", "weekdays": false}`; 24-hour times, the car's own clock | `set_charging_schedule` (python-lucidmotors with that call; see below) |
+| Charging schedule | `charging/commands/charging-schedule` | `off`, `on` (keeps the car's times), `23:00-06:00` (on, with those times; `23:00-` or `-06:00` changes one end), or `{"on": true, "start": "23:00", "end": "06:00", "weekdays": false}`; 24-hour times, the car's own clock | `set_charging_schedule` (python-lucidmotors with that call; see below) |
 | Keyless driving | `commands/keyless-driving` | `on`, `off`; the car turns it on only when locked with no key in reach | `KeylessDrivingActionRequest` (sent the way the library's own calls are; it has no method for it) |
 
 Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "mode": "heat", "level": "low"}`). The state each one changes is published where the API has it, so a UI can show a toggle:

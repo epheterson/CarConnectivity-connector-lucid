@@ -322,9 +322,10 @@ class MpbFault(_Named):
 
 
 class ChargingScheduleCommand(GenericCommand):
-    """The charging schedule: "off", "on", "23:00-06:00" (on, with those times), or
-    {"on": bool, "start": "HH:MM", "end": "HH:MM", "weekdays": bool}. A bare "on" and "off" keep
-    the times the car holds. Checked here, so a bad time never reaches the car."""
+    """The charging schedule: "off", "on", "23:00-06:00" (on, with those times), "23:00-" or "-06:00"
+    (on, changing only the start or only the end), or {"on": bool, "start": "HH:MM", "end": "HH:MM",
+    "weekdays": bool}. Whatever is not given is kept as the car holds it. Checked here, so a bad time
+    never reaches the car."""
     def __init__(self, name: str, parent: Optional[GenericObject] = None, initialization: Optional[Dict] = None) -> None:
         super().__init__(name=name, parent=parent, initialization=initialization)
 
@@ -342,7 +343,7 @@ class ChargingScheduleCommand(GenericCommand):
         self._set_value(new_value)
 
 
-SCHEDULE_USAGE = 'use "off", "on", "HH:MM-HH:MM", or {"on": bool, "start": "HH:MM", "end": "HH:MM", "weekdays": bool}'
+SCHEDULE_USAGE = 'use "off", "on", "HH:MM-HH:MM" ("HH:MM-" or "-HH:MM" for one end), or {"on": bool, "start": "HH:MM", "end": "HH:MM", "weekdays": bool}'
 _CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
 
 
@@ -364,9 +365,9 @@ def parse_schedule(value: Any) -> Dict[str, Any]:
         word = value.strip().lower()
         if word in ('on', 'off'):
             out['on'] = word == 'on'
-        elif '-' in word:
+        elif '-' in word and word != '-':
             start, _, end = word.partition('-')
-            out.update(on=True, start=clock_minutes(start), end=clock_minutes(end))
+            out.update(on=True, start=clock_minutes(start) if start.strip() else None, end=clock_minutes(end) if end.strip() else None)
         else:
             raise SetterError(f'Invalid value for the charging schedule: {value!r}; {SCHEDULE_USAGE}')
     elif isinstance(value, dict):
@@ -377,8 +378,6 @@ def parse_schedule(value: Any) -> Dict[str, Any]:
         for key in ('start', 'end'):
             if value.get(key) is not None:
                 out[key] = clock_minutes(value[key])
-        if (out['start'] is None) != (out['end'] is None):
-            raise SetterError('Give both start and end, or neither')
     else:
         raise SetterError(f'Invalid value for the charging schedule: {value!r}; {SCHEDULE_USAGE}')
     return out
