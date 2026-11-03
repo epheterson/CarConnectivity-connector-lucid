@@ -16,7 +16,7 @@ creature comfort, battery preconditioning, AC current limit) as set-hooks that r
 the caller's thread through the poller's own session. They are the only thing
 that ever wakes the car, and they do it explicitly (LucidSession.command).
 """
-# pylint: disable=protected-access
+# pylint: disable=protected-access,too-many-lines
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
@@ -46,8 +46,8 @@ from carconnectivity.vehicle import GenericVehicle
 from carconnectivity_connectors.base.connector import BaseConnector
 from carconnectivity_connectors.lucid import mapping
 from carconnectivity_connectors.lucid.auth.session import LucidSession, translate_api_error
-from carconnectivity_connectors.lucid.vehicle import AlarmCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, OpenCloseCommand, \
-    LevelCommand, SeatClimateCommand, WindowsCommand
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, ChargingScheduleCommand, LucidElectricVehicle, LucidVehicle, OnOffCommand, \
+    OpenCloseCommand, LevelCommand, SeatClimateCommand, WindowsCommand
 from carconnectivity_connectors.lucid._version import __version__
 
 if TYPE_CHECKING:
@@ -89,6 +89,18 @@ FAST_POLL_MAX_S = 600
 OTA_HISTORY_REFRESH_S = 86400.0
 # A read that failed, or that does not yet list the car's own version, is tried again after this.
 OTA_HISTORY_RETRY_S = 3600.0
+# The reads that are not the poll, each one request to Lucid's cloud and none to the car: the charging
+# schedule (also read at once after a write), Sentry's event log, and the charge detail records.
+SCHEDULE_READ_S = 3600.0
+SENTRY_EVENTS_READ_S = 3600.0
+SENTRY_EVENTS_WINDOW = timedelta(days=30)
+SENTRY_EVENTS_LIMIT = 100
+CHARGING_RECORDS_READ_S = 6 * 3600.0
+CHARGING_RECORDS_LIMIT = 50
+# A slow read that failed is tried again after this, not on the next poll.
+SLOW_READ_RETRY_S = 3600.0
+# DocumentType for a Gravity's release notes (GTY_RELEASE_NOTES_POST); an Air's is the library's default.
+DOCUMENT_GTY_RELEASE_NOTES_POST = 13
 
 
 async def _keyless_driving(api: Any, vehicle: Any, on: bool) -> None:
@@ -132,6 +144,8 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # OTA history per VIN: (published JSON, when to read it again in monotonic seconds, the
         # car's version when it was read). One read per VIN, then rarely; see _apply_software_history.
         self._ota_history: Dict[str, Tuple[Optional[str], float, Optional[str]]] = {}
+        # The slow reads' last good result and when each is next due, per (kind, VIN); see _slow_read.
+        self._slow: Dict[Tuple[str, str], Tuple[Any, float]] = {}
 
         self.connection_state: EnumAttribute[ConnectionState] = EnumAttribute(name="connection_state", parent=self, value_type=ConnectionState,
                                                                               value=ConnectionState.DISCONNECTED, tags={'connector_custom'})
@@ -345,6 +359,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             self._apply(vehicle, lucid_vehicle)
             self._apply_release_notes(vehicle, lucid_vehicle)
             self._apply_software_history(vehicle, lucid_vehicle)
+            self._apply_slow_reads(vehicle, lucid_vehicle)
         self._lucid_vehicles = lucid_vehicles
         for vin in set(garage.list_vehicle_vins()) - seen:
             gone = garage.get_vehicle(vin)
@@ -363,7 +378,9 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             return
         vin: str = vehicle.vin.value
         version = mapping.waiting_update(_dig(lucid_vehicle, "state", "software_update"))
-        if not mapping.release_notes_apply(_dig(lucid_vehicle, "config", "model")):
+        model = _dig(lucid_vehicle, "config", "model")
+        document_type = None if model == mapping.MODEL_AIR else DOCUMENT_GTY_RELEASE_NOTES_POST
+        if not mapping.release_notes_apply(model) or (document_type is not None and not self._library_has('get_document_info')):
             version = None  # never another model's notes
         notes: Optional[str] = None
         link: Optional[str] = None
@@ -371,7 +388,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             _, notes, link = self._release_notes[vin]
         elif version is not None and time.monotonic() >= self._release_notes_retry.get((vin, version), 0.0):
             try:
-                notes, link = mapping.release_notes(self._session.release_notes(lucid_vehicle, version), version)
+                notes, link = mapping.release_notes(self._session.release_notes(lucid_vehicle, version, document_type), version)
             except Exception as err:  # pylint: disable=broad-except
                 # Rate limits included: a missing note is not worth the poll's backoff.
                 LOG.warning('Release notes for %s could not be fetched (%s); trying again in %.0fs', version, err, RELEASE_NOTES_RETRY_S)
@@ -406,6 +423,78 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
             held = (history, time.monotonic() + retry_s, current)
             self._ota_history[vin] = held
         vehicle.software_history._set_value(held[0])
+
+    @staticmethod
+    def _library_has(call: str) -> bool:
+        """Whether the installed python-lucidmotors has this call. The connector runs on the
+        library it was installed with; a call that library lacks switches its feature off."""
+        from lucidmotors import LucidAPI  # pylint: disable=import-outside-toplevel
+        return hasattr(LucidAPI, call)
+
+    def _slow_read(self, kind: str, vin: str, every_s: float, read: Callable[[], Any]) -> Any:
+        """The last good result of a read that is not the poll, run again only when it is due:
+        every `every_s`, or in SLOW_READ_RETRY_S after a failure (which is logged, never raised
+        and never costs the poll its backoff). What was read last stays published."""
+        held = self._slow.get((kind, vin))
+        if held is None or time.monotonic() >= held[1]:
+            value, due = (held[0] if held else None), time.monotonic() + SLOW_READ_RETRY_S
+            try:
+                value, due = read(), time.monotonic() + every_s
+            except Exception as err:  # pylint: disable=broad-except
+                LOG.warning('The %s could not be read (%s); trying again in %.0fs', kind, err, SLOW_READ_RETRY_S)
+            held = (value, due)
+            self._slow[(kind, vin)] = held
+        return held[0]
+
+    def _apply_slow_reads(self, vehicle: GenericVehicle, lucid_vehicle: Any) -> None:
+        """Three reads that are not the poll: the charging schedule, Sentry's event log and Lucid's
+        charge detail records. Each is one request to Lucid's cloud, made rarely, and a library
+        too old to have the call leaves its attributes unknown."""
+        if not isinstance(vehicle, LucidVehicle):
+            return
+        vin: str = vehicle.vin.value
+        if self._library_has('get_charging_schedule'):
+            held = self._slow_read('charging schedule', vin, SCHEDULE_READ_S,
+                                   lambda: mapping.charging_schedule(
+                                       self._session.read('charging schedule', lambda api: api.get_charging_schedule(lucid_vehicle)))
+                                   ) or mapping.charging_schedule(None)
+        else:
+            held = mapping.charging_schedule(None)
+        vehicle.charging_schedule_on._set_value(held["on"])
+        vehicle.charging_schedule_start._set_value(held["start"])
+        vehicle.charging_schedule_end._set_value(held["end"])
+        vehicle.charging_schedule_weekdays._set_value(held["weekdays"])
+        vehicle.charging_schedule_available._set_value(held["available"])
+        vehicle.sentry_events._set_value(self._slow_read('Sentry events', vin, SENTRY_EVENTS_READ_S, lambda: self._read_sentry_events(lucid_vehicle)))
+        ema_id = mapping.text(_dig(lucid_vehicle, "config", "ema_id"))
+        if ema_id and self._library_has('get_charging_data_records'):
+            vehicle.charging_records._set_value(self._slow_read('charge records', vin, CHARGING_RECORDS_READ_S, lambda: self._read_charging_records(ema_id)))
+
+    def _read_sentry_events(self, lucid_vehicle: Any) -> Optional[str]:
+        now = datetime.now(tz=timezone.utc)
+        reply = self._session.read(
+            'Sentry events', lambda api: api.get_sentry_events(lucid_vehicle.vehicle_id, now - SENTRY_EVENTS_WINDOW, now, limit=SENTRY_EVENTS_LIMIT))
+        return mapping.sentry_events(_dig(reply, "events"))
+
+    def _read_charging_records(self, ema_id: str) -> Optional[str]:
+        return mapping.charging_records(self._session.read('charge records', lambda api: api.get_charging_data_records(ema_id, limit=CHARGING_RECORDS_LIMIT)))
+
+    def _on_charging_schedule(self, command: ChargingScheduleCommand, wanted: Dict[str, Any]) -> Dict[str, Any]:
+        vehicle = self._vehicle_of(command)
+        if not self._library_has('set_charging_schedule'):
+            raise CommandError('Not sent: the installed python-lucidmotors cannot set a charging schedule; upgrade it')
+        held = (self._slow.get(('charging schedule', vehicle.vin.value)) or (None,))[0]
+        if held is None:
+            raise CommandError('Not sent: the car\'s charging schedule has not been read yet; try again after the next poll')
+        try:
+            on, start, end, weekdays = mapping.schedule_request(held, wanted)
+        except ValueError as err:
+            raise CommandError(f'Not sent: {err}') from err
+        self._send(vehicle, f'set the charging schedule ({"on" if on else "off"}, {start} to {end})',
+                   lambda api, v: api.set_charging_schedule(v, on, start, end, weekdays))
+        # Read it back on the poll the command asks for, so what the car now holds is what is published.
+        self._slow[('charging schedule', vehicle.vin.value)] = (held, 0.0)
+        return wanted
 
     # -- commands --------------------------------------------------------------
     def _add_commands(self, vehicle: GenericVehicle) -> None:
@@ -464,6 +553,7 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
                 choice: (f'set steering wheel heater {choice}', lambda api, v, level=level: api.steering_wheel_heater_control(v, level))
                 for choice, level in mapping.STEERING_LEVEL.items()}, refusal=mapping.steering_heater_refusal)),
             (vehicle.climatization.commands, SeatClimateCommand, 'seat-climate', self._on_seat_climate),
+            (vehicle.charging.commands, ChargingScheduleCommand, 'charging-schedule', self._on_charging_schedule),
             (vehicle.charging.commands, OnOffCommand, 'battery-preconditioning', self._choice_hook({
                 OnOffCommand.Command.ON: ('turn on battery preconditioning', lambda api, v: api.battery_precon_on(v)),
                 OnOffCommand.Command.OFF: ('turn off battery preconditioning', lambda api, v: api.battery_precon_off(v))})),
@@ -722,6 +812,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         if odo is not None:
             sv.odometer._set_value(odo, measured=measured, unit=Length.KM)
         sv.outside_temperature._set_value(mapping.plausible_temp(_f(_dig(st, "cabin", "exterior_temp"))), measured=measured, unit=Temperature.C)
+        # Trim and paint by name, and the Electrify America plan on the car (its end date as a time).
+        sv.trim._set_value(mapping.named(mapping.TRIM, _dig(cfg, "variant")), measured=measured)
+        sv.paint_color._set_value(mapping.named(mapping.PAINT, _dig(cfg, "paint_color")), measured=measured)
+        plan = _dig(cfg, "ea_subscription")
+        sv.ea_plan_name._set_value(mapping.text(_dig(plan, "name")), measured=measured)
+        sv.ea_plan_expires._set_value(mapping.epoch_time(_dig(plan, "expiration_date")), measured=measured)
 
     @staticmethod
     def _apply_drive(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -775,6 +871,17 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # The car's own energy meter for this session, and when it will reach the limit.
         sv.charge_session_energy._set_value(mapping.charge_session_energy(cs, _dig(ch, "charge_session_kwh")), measured=measured, unit=Energy.KWH)
         sv.charging.estimated_date_reached._set_value(mapping.charge_finish(measured, cs, _dig(ch, "session_minutes_remaining")), measured=measured)
+        # Why a plugged-in car is not charging, and what the session reports beside the meter. Figures the
+        # proto gives no unit for are published raw, and only while they mean something.
+        scheduled = mapping.pick(mapping.SCHEDULED_CHARGE, _dig(ch, "scheduled_charge"))
+        sv.scheduled_charge._set_value(scheduled, measured=measured)
+        sv.scheduled_charge_time_raw._set_value(mapping.nonzero(_dig(ch, "charge_scheduled_time")) if scheduled is not mapping.ScheduledCharge.IDLE else None,
+                                                measured=measured)
+        sv.charge_session_range_raw._set_value(mapping.while_charging(cs, _dig(ch, "charge_session_mi")), measured=measured)
+        sv.charge_port_power_raw._set_value(mapping.while_charging(cs, _dig(ch, "port_power")), measured=measured)
+        sv.discharge_energy_raw._set_value(mapping.nonzero(_dig(ch, "discharge_energy")) if cs in mapping.CHARGE_DISCHARGING else None, measured=measured)
+        sv.charge_session_current_limit._set_value(mapping.cable_in(cs, _dig(ch, "active_session_ac_current_limit")), measured=measured)
+        sv.charge_status._set_value(mapping.pick(mapping.CHARGE_STATUS, _dig(st, "notifications", "charging_general_status")), measured=measured)
 
     @staticmethod
     def _apply_position(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -787,9 +894,12 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.gps_elevation_raw._set_value(mapping.nonzero(_dig(gps, "elevation")) if fix else None, measured=measured)
         if not fix:
             return
-        sv.position.latitude._set_value(lat, measured=measured)
-        sv.position.longitude._set_value(lon, measured=measured)
-        sv.position.heading._set_value(_f(_dig(gps, "heading_precise")), measured=measured)
+        # Stamped with the fix's own time when the car gives one, so a stale fix (a garage, a tunnel) is
+        # dated when it was taken and not now.
+        taken = mapping.stamped(mapping.epoch_time(_dig(gps, "position_time")), measured)
+        sv.position.latitude._set_value(lat, measured=taken)
+        sv.position.longitude._set_value(lon, measured=taken)
+        sv.position.heading._set_value(_f(_dig(gps, "heading_precise")), measured=taken)
         sv.position.position_type._set_value(mapping.position_type(_dig(st, "power")), measured=measured)
 
     @staticmethod
@@ -867,12 +977,16 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         # but the proto does not say so, so it is published as the car's number under the
         # proto's name. 0 is the car not saying.
         sv.battery_health_level._set_value(mapping.nonzero(_dig(battery, "battery_health_level")), measured=measured)
+        sv.battery_range_unavailable._set_value(mapping.nonzero(_dig(battery, "unavailable_range")), measured=measured, unit=Length.KM)
         software_update = _dig(st, "software_update")
         version = mapping.waiting_update(software_update)
         sv.software_update_version._set_value(version, measured=measured)
         install = mapping.install_time(_dig(software_update, "install_duration_minutes")) if version is not None else None
         sv.software_update_install_time._set_value(install, measured=measured)
         sv.software_update_available._set_value(mapping.update_available(_dig(st, "software_update", "update_available")), measured=measured)
+        update_state = _dig(software_update, "state")
+        sv.software_update_state._set_value(mapping.pick(mapping.UPDATE_STATUS, update_state), measured=measured)
+        sv.software_update_percent._set_value(mapping.percent_installed(update_state, _dig(software_update, "percent_complete")), measured=measured)
 
     @staticmethod
     def _apply_security(sv: LucidVehicle, st: Any, measured: datetime) -> None:
@@ -881,6 +995,13 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.sentry_inactive_reason._set_value(mapping.sentry_inactive_reason(sentry), measured=measured)
         usb = _dig(sentry, "usb_drive_status")
         sv.sentry_usb_drive_connected._set_value(mapping.two_state(usb, mapping.USB_CONNECTED, mapping.USB_NOT_CONNECTED), measured=measured)
+        sv.sentry_alarm_sounding._set_value(mapping.two_state(_dig(sentry, "remote_alarm_state"), mapping.REMOTE_ALARM_ON, mapping.REMOTE_ALARM_OFF),
+                                            measured=measured)
+        sv.sentry_range_cost_per_day_raw._set_value(mapping.nonzero(_dig(sentry, "range_cost_per_day")), measured=measured)
+        # Very likely the at-home and at-work settings, undecoded: published only when the car sent the block.
+        multiplex = _dig(sentry, "multiplex_values")
+        sv.sentry_location_settings_raw._set_value(_f(_dig(multiplex, "sentry_location_settings_raw")) if mapping.has(sentry, "multiplex_values") else None,
+                                                   measured=measured)
         body = _dig(st, "body")
         sv.living_object_detection._set_value(mapping.pick(mapping.LIVING_OBJECT_DETECTION, _dig(body, "living_object_detection_status")),
                                               measured=measured)
@@ -893,8 +1014,14 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
     def _apply_tires(sv: LucidVehicle, st: Any, measured: datetime) -> None:
         """Four pressures in bar and the car's own warning, from ChassisState."""
         chassis = _dig(st, "chassis")
+        # The pressures are as old as the car's last reading of them, which a parked car does not renew.
+        read_at = mapping.epoch_time(_dig(chassis, "tire_pressure_last_updated"))
+        taken = mapping.stamped(read_at, measured)
+        sv.tire_pressure_updated._set_value(read_at, measured=measured)
+        sides = ("left_front", "left_rear", "right_front", "right_rear")
+        sv.tire_sensor_defective._set_value(mapping.tire_sensor_defective(_dig(chassis, f"sensor_defective_{side}") for side in sides), measured=measured)
         for wheel in mapping.TIRES:
-            getattr(sv, f"tire_pressure_{wheel}")._set_value(_f(_dig(chassis, f"{wheel}_tire_pressure_bar")), measured=measured)
+            getattr(sv, f"tire_pressure_{wheel}")._set_value(_f(_dig(chassis, f"{wheel}_tire_pressure_bar")), measured=taken)
         flags = [_dig(chassis, f"{kind}_warn_{side}") for kind in ("hard", "soft") for side in ("left_front", "left_rear", "right_front", "right_rear")]
         sv.tire_warning._set_value(mapping.tire_warning(flags), measured=measured)
 
@@ -949,6 +1076,10 @@ class Connector(BaseConnector):  # pylint: disable=too-many-instance-attributes
         sv.charge_port._set_value(mapping.door_open_state(_dig(st, "body", "charge_port")), measured=measured)
         sv.keyless_driving._set_value(mapping.two_state(_dig(st, "keyless_driving"), mapping.KEYLESS_ON, mapping.KEYLESS_OFF), measured=measured)
         sv.valet._set_value(mapping.valet(_dig(st, "drive_mode")), measured=measured)
+        sv.drive_mode._set_value(mapping.pick(mapping.DRIVE_MODE, _dig(st, "drive_mode")), measured=measured)
+        sv.gear._set_value(mapping.pick(mapping.GEAR, _dig(st, "gear_position")), measured=measured)
+        sv.privacy_mode._set_value(mapping.two_state(_dig(st, "privacy_mode"), mapping.PRIVACY_ON, mapping.PRIVACY_OFF), measured=measured)
+        sv.mpb_fault._set_value(mapping.pick(mapping.MPB_FAULT, _dig(st, "fault_state", "mpb_fault_status")), measured=measured)
         sv.lights.light_state._set_value(mapping.headlights(_dig(st, "chassis", "headlights")), measured=measured)
         sv.battery_preconditioning._set_value(mapping.two_state(_dig(st, "battery", "preconditioning_status"), mapping.PRECON_ON, mapping.PRECON_OFF),
                                               measured=measured)

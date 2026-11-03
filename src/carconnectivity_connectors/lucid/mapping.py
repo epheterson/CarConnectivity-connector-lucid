@@ -10,6 +10,7 @@ nothing has checked them while driving or charging. Lucid reports km, km/h for s
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Optional, Tuple
 
@@ -20,8 +21,8 @@ from carconnectivity.windows import Windows
 from carconnectivity.position import Position
 from carconnectivity.vehicle import GenericVehicle
 
-from carconnectivity_connectors.lucid.vehicle import AlarmCommand, AlarmStatus, ClimateLevel, LivingObjectDetection, SeatClimateCommand, \
-    SentryInactiveReason, UnattendedOccupantDetection
+from carconnectivity_connectors.lucid.vehicle import AlarmCommand, AlarmStatus, ChargeStatus, ClimateLevel, DriveMode, Gear, LivingObjectDetection, \
+    MpbFault, ScheduledCharge, SeatClimateCommand, SentryInactiveReason, UnattendedOccupantDetection, UpdateStatus
 
 # --- Lucid enum ints (proto/vehicle_state_service.proto) --------------------
 
@@ -588,15 +589,14 @@ def install_time(minutes: Any) -> Optional[timedelta]:
 
 
 # Model: 0 UNKNOWN, 1 AIR, 2 GRAVITY.
-MODEL_AIR = 1
+MODEL_AIR, MODEL_GRAVITY = 1, 2
 
 
 def release_notes_apply(model: Optional[int]) -> bool:
-    """Whether the library's release notes are this car's. get_update_release_notes asks
-    for DOCUMENT_TYPE_RELEASE_NOTES_POST, the Air's; a Gravity's are another document type
-    (GTY_RELEASE_NOTES_POST) the library cannot ask for, and an Air's notes on a Gravity
-    would describe the wrong car. So only a car that says it is an Air gets them."""
-    return model == MODEL_AIR
+    """Whether this car's release notes can be asked for: an Air's, and from 0.5.0 a Gravity's
+    (its own document type, GTY_RELEASE_NOTES_POST, which needs a library with get_document_info).
+    A car that does not say its model gets none: another model's notes would describe the wrong car."""
+    return model in (MODEL_AIR, MODEL_GRAVITY)
 
 
 def release_notes(document: Any, version: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
@@ -701,3 +701,236 @@ DOORS = {
     "frunk": "front_cargo",
     "trunk": "rear_cargo",
 }
+
+
+# --- 0.5.0 reads --------------------------------------------------------------------------
+
+def has(message: Any, field: str) -> bool:
+    """Whether a sub-message was sent at all. A real protobuf message tells (a field the car
+    left out reads as proto3's zero, which is not the same as zero); anything else is judged by None."""
+    try:
+        return bool(message.HasField(field))
+    except (AttributeError, ValueError):
+        return _dig(message, field) is not None
+
+
+# A moment the car sends as a bare integer, in seconds or milliseconds since 1970 (its own
+# fields differ and the proto does not say). The two ranges are 2015 to 2100 in each unit
+# and do not overlap, so which one it is can be told from the number; anything outside
+# both is not a time.
+_EPOCH_S = (1.42e9, 4.1e9)
+_EPOCH_MS = (1.42e12, 4.1e12)
+
+
+def epoch_time(value: Any) -> Optional[datetime]:
+    """A UTC time from an epoch count in seconds or milliseconds; None for 0 (not said) or a number that is neither."""
+    number = nonzero(value)
+    if number is None:
+        return None
+    if _EPOCH_S[0] <= number < _EPOCH_S[1]:
+        return datetime.fromtimestamp(number, tz=timezone.utc)
+    if _EPOCH_MS[0] <= number < _EPOCH_MS[1]:
+        return datetime.fromtimestamp(number / 1000, tz=timezone.utc)
+    return None
+
+
+FIX_FUTURE_S = 120.0
+
+
+def stamped(when: Optional[datetime], measured: datetime) -> datetime:
+    """The time to stamp a reading with: the car's own time for it when that is a real time
+    no later than the poll's (a stale fix or tire reading is then dated when it was taken,
+    not now), else the poll's."""
+    if when is None or (when - measured).total_seconds() > FIX_FUTURE_S:
+        return measured
+    return when
+
+
+def while_charging(charge_state: Optional[int], value: Any) -> Optional[float]:
+    """A session figure the car reports as a bare number: only while a session is moving
+    energy, and never its zero, which a parked car sends for a field it has no reading for."""
+    return nonzero(value) if charge_state in CHARGE_CHARGING | CHARGE_DISCHARGING else None
+
+
+def cable_in(charge_state: Optional[int], value: Any) -> Optional[float]:
+    """A figure that only means something with a cable in (a parked, unplugged Gravity sends
+    active_session_ac_current_limit 80, the setting's own value)."""
+    if connector_connection_state(charge_state) is not ChargingConnector.ChargingConnectorConnectionState.CONNECTED:
+        return None
+    return nonzero(value)
+
+
+# ScheduledChargeState: 0 UNKNOWN, 1 IDLE, 2 SCHEDULED_TO_CHARGE, 3 REQUEST_TO_CHARGE.
+SCHEDULED_CHARGE = {1: ScheduledCharge.IDLE, 2: ScheduledCharge.SCHEDULED, 3: ScheduledCharge.REQUESTED}
+# GeneralChargeStatus: 0 UNKNOWN, 1 DEFAULT, 4 DERATED_CHARGING_POWER, 5 SAVETIME_TEMP_PRECON (no 2 or 3).
+CHARGE_STATUS = {1: ChargeStatus.NORMAL, 4: ChargeStatus.DERATED, 5: ChargeStatus.PRECONDITIONING_SAVES_TIME}
+# GearPosition: 0 UNKNOWN, 1 PARK, 2 REVERSE, 3 NEUTRAL, 4 DRIVE.
+GEAR = dict(enumerate(Gear, start=1))
+# DriveMode, as the proto numbers it. Reserved, factory and developer modes (6, 7, 10 to 12, 17)
+# are not modes an owner is in, and read as unknown.
+DRIVE_MODE = {1: DriveMode.COMFORT, 2: DriveMode.SWIFT, 3: DriveMode.WINTER, 4: DriveMode.VALET, 5: DriveMode.SPORT_PLUS,
+              8: DriveMode.SERVICE, 9: DriveMode.LAUNCH, 13: DriveMode.TRANSPORT, 14: DriveMode.SHOWROOM, 15: DriveMode.TOW,
+              16: DriveMode.TEST_DRIVE, 19: DriveMode.TRACK_A, 20: DriveMode.TRACK_B, 21: DriveMode.TRACK_C, 22: DriveMode.TRAILER,
+              23: DriveMode.YOUNG_ADULT, 24: DriveMode.CAMPING, 25: DriveMode.TRAIN, 26: DriveMode.CUSTOM}
+# UpdateState: 1 IN_PROGRESS, 2 SUCCESS, 3 FAILED, 4 WAITING_ON_BCM, 5 FAILED_DRIVE_ALLOWED, 6 FAILED_NO_ACTION,
+# 7 SUCCESS_WITH_WARNINGS, 8 NOTSTARTED_WITH_WARNINGS.
+UPDATE_STATUS = {1: UpdateStatus.INSTALLING, 2: UpdateStatus.SUCCEEDED, 3: UpdateStatus.FAILED, 4: UpdateStatus.WAITING,
+                 5: UpdateStatus.FAILED_DRIVABLE, 6: UpdateStatus.FAILED, 7: UpdateStatus.SUCCEEDED_WITH_WARNINGS,
+                 8: UpdateStatus.NOT_STARTED_WITH_WARNINGS}
+UPDATE_INSTALLING = {1, 4}
+# MpbFaultStatus: 1 NORMAL, 2 WARNING, 3 CRITICAL, 4 WARNING_HAPS, 5 CRITICAL_HAPS, 6 CRITICAL_HW_FLT, 7 RESERVED, 8 INVALID.
+MPB_FAULT = {1: MpbFault.NORMAL, 2: MpbFault.WARNING, 3: MpbFault.CRITICAL, 4: MpbFault.WARNING, 5: MpbFault.CRITICAL, 6: MpbFault.HARDWARE_FAULT}
+# SentryRemoteAlarmState: 0 UNKNOWN, 1 IDLE, 2 ON, 3 OFF.
+REMOTE_ALARM_ON, REMOTE_ALARM_OFF = {2}, {1, 3}
+# PrivacyMode: 0 UNKNOWN, 1 CONNECTIVITY_ENABLED, 2 CONNECTIVITY_DISABLED. True means the owner has switched the car's connectivity off.
+PRIVACY_ON, PRIVACY_OFF = {2}, {1}
+# TirePressureSensorDefective: 0 UNKNOWN, 1 OFF, 2 ON.
+SENSOR_DEFECTIVE, SENSOR_OK = 2, 1
+
+# ModelVariant and PaintColor, in the words the Lucid app uses. A number not listed (a new trim
+# or colour) reads as unknown rather than as a guess.
+TRIM = {1: "Dream Edition", 2: "Grand Touring", 3: "Touring", 4: "Pure", 5: "Sapphire", 6: "Hyper", 7: "Executive"}
+PAINT = {1: "Eureka Gold", 2: "Stellar White", 3: "Infinite Black", 4: "Cosmos Silver", 5: "Quantum Grey", 6: "Zenith Red",
+         7: "Fathom Blue", 8: "Custom", 9: "Sapphire Blue", 10: "Lunar Titanium", 11: "Aurora Green", 12: "Supernova Bronze",
+         13: "Gloss Black Primary"}
+
+
+def named(table: dict, value: Optional[int]) -> Optional[str]:
+    """A name from TRIM or PAINT; None for 0 or a number not listed."""
+    return table.get(value) if value is not None else None
+
+
+def tire_sensor_defective(flags: Iterable[Optional[int]]) -> Optional[bool]:
+    """Any tire sensor the car calls defective. True if any is, False if every one that reported is fine, None if none did."""
+    seen = False
+    for flag in flags:
+        if flag == SENSOR_DEFECTIVE:
+            return True
+        if flag == SENSOR_OK:
+            seen = True
+    return False if seen else None
+
+
+def percent_installed(state: Optional[int], percent: Any) -> Optional[float]:
+    """How far an install has got, only while one is under way (the field reads 0 or its last value otherwise)."""
+    if state not in UPDATE_INSTALLING:
+        return None
+    number = _f(percent)
+    return number if number is not None and 0 <= number <= 100 else None
+
+
+# --- the charging schedule ----------------------------------------------------------------
+
+_CAR_CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(:\d{2})?$")
+_CAR_CLOCK_BARE = re.compile(r"^(\d{2})(\d{2})$")
+
+
+def schedule_clock(clock: Optional[str]) -> Optional[str]:
+    """A schedule time as "HH:MM", whichever of "H:MM", "HH:MM", "HH:MM:SS" or "HHMM" the
+    car sent; None for anything else, which is shown as unknown rather than guessed at."""
+    value = (clock or "").strip()
+    match = _CAR_CLOCK.match(value) or _CAR_CLOCK_BARE.match(value)
+    if match is None:
+        return None
+    hours, minutes = int(match.group(1)), int(match.group(2))
+    return f"{hours:02d}:{minutes:02d}" if hours < 24 and minutes < 60 else None
+
+
+def schedule_clock_like(sample: Optional[str], minutes: int) -> Optional[str]:
+    """`minutes` after midnight written the way the car wrote `sample`, its own schedule time:
+    the proto types these as strings and does not say which. With no sample (a schedule never
+    set) it is "HH:MM". None when the sample is in a form this does not know, so nothing is
+    sent in a guessed format."""
+    hours, mins = divmod(minutes, 60)
+    value = (sample or "").strip()
+    if not value or re.match(r"^\d{1,2}:\d{2}$", value):
+        return f"{hours:02d}:{mins:02d}"
+    if re.match(r"^\d{1,2}:\d{2}:\d{2}$", value):
+        return f"{hours:02d}:{mins:02d}:00"
+    if _CAR_CLOCK_BARE.match(value):
+        return f"{hours:02d}{mins:02d}"
+    return None
+
+
+def charging_schedule(schedule: Any) -> dict:
+    """The car's charging schedule as plain values: on, start, end ("HH:MM" or None), weekdays and
+    available, each None when the car did not send the message. `raw_start` and `raw_end` are
+    what it sent, which a write copies the format of."""
+    if schedule is None:
+        return {"on": None, "start": None, "end": None, "weekdays": None, "available": None, "raw_start": None, "raw_end": None}
+    raw_start, raw_end = text(_dig(schedule, "start_time")), text(_dig(schedule, "end_time"))
+    return {"on": _bool(_dig(schedule, "schedule_on")), "start": schedule_clock(raw_start), "end": schedule_clock(raw_end),
+            "weekdays": _bool(_dig(schedule, "weekday_on")), "available": _bool(_dig(schedule, "charging_available")),
+            "raw_start": raw_start, "raw_end": raw_end}
+
+
+def _bool(value: Any) -> Optional[bool]:
+    return value if isinstance(value, bool) else None
+
+
+def schedule_request(held: dict, wanted: dict) -> Tuple[bool, str, str, bool]:
+    """(on, start, end, weekdays) to send: `wanted`'s values over what the car holds. ValueError, with
+    the reason, when there is nothing to build a write from or the car's time format is not known."""
+    start, end = wanted["start"], wanted["end"]
+    if start is None:
+        if held["start"] is None or held["end"] is None:
+            if wanted["on"]:
+                raise ValueError("the car holds no schedule times to turn on; give them as HH:MM-HH:MM")
+            raise ValueError("the car's schedule has not been read yet; try again after the next poll")
+        start, end = divmod_minutes(held["start"]), divmod_minutes(held["end"])
+    start_text = schedule_clock_like(held["raw_start"], start)
+    end_text = schedule_clock_like(held["raw_end"], end)
+    if start_text is None or end_text is None:
+        raise ValueError(f"the car writes schedule times as {held['raw_start']!r}, a form this connector does not know; set it in the app")
+    weekdays = wanted["weekdays"] if wanted["weekdays"] is not None else bool(held["weekdays"])
+    return bool(wanted["on"]), start_text, end_text, weekdays
+
+
+def divmod_minutes(clock: str) -> int:
+    """"23:05" as minutes after midnight."""
+    hours, minutes = clock.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+# --- Sentry events and charge records -----------------------------------------------------
+
+def sentry_events(events: Iterable[Any]) -> Optional[str]:
+    """Sentry's event log as JSON, oldest first: `[{"id", "at", "level", "type", "lat", "lon", "pictures"}]`
+    with the time in UTC. The pictures' download links are Lucid's cloud and are never read, only counted; the
+    level is the proto's 1 to 3 (someone walking by, tampering, a breach) and the type its name. None when nothing is usable."""
+    rows = []
+    for event in events or ():
+        stamp = _dig(event, "recorded_at")
+        seconds = _f(_dig(stamp, "seconds"))
+        event_id = text(_dig(event, "event_id"))
+        if not event_id or not seconds:
+            continue
+        lat, lon = _f(_dig(event, "event_geo_location", "latitude")), _f(_dig(event, "event_geo_location", "longitude"))
+        where = has_fix(lat, lon)
+        kind = {1: "collision", 2: "break-in", 3: "towing"}.get(_dig(event, "event_type"))
+        rows.append((seconds, {"id": event_id, "at": datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                               "level": nonzero(_dig(event, "event_threat_level")), "type": kind,
+                               "lat": lat if where else None, "lon": lon if where else None,
+                               "pictures": len(list(_dig(event, "media_list") or ()))}))
+    rows.sort(key=lambda row: row[0])
+    return json.dumps([row for _, row in rows], separators=(",", ":")) if rows else None
+
+
+def charging_records(records: Iterable[Any]) -> Optional[str]:
+    """Lucid's charge detail records as JSON, oldest first: id, start and stop (UTC), energy, times,
+    the charger's name and the currency. Energy and the times are the numbers as sent: the proto gives
+    them no unit. The charger's address and coordinates, the account's id and the card used are never read."""
+    rows = []
+    for record in records or ():
+        record_id = text(_dig(record, "id"))
+        start, stop = _f(_dig(record, "start_datetime", "seconds")), _f(_dig(record, "stop_datetime", "seconds"))
+        if not record_id or not start:
+            continue
+        rows.append((start, {"id": record_id, "start": datetime.fromtimestamp(start, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                             "stop": datetime.fromtimestamp(stop, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if stop else None,
+                             "energy": nonzero(_dig(record, "total_energy")), "total_time": nonzero(_dig(record, "total_time")),
+                             "charge_time": nonzero(_dig(record, "charge_time")), "idle_time": nonzero(_dig(record, "idle_time")),
+                             "parking_time": nonzero(_dig(record, "total_parking_time")), "charger": text(_dig(record, "location", "name")),
+                             "currency": text(_dig(record, "currency"))}))
+    rows.sort(key=lambda row: row[0])
+    return json.dumps([row for _, row in rows], separators=(",", ":")) if rows else None
