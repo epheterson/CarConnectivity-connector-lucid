@@ -77,6 +77,7 @@ Off by default. Without the option the connector creates no command objects at a
 | Steering wheel heater | `climatization/commands/steering-wheel-heater` | `off`, `low`, `medium`, `high` | `steering_wheel_heater_control` |
 | Battery preconditioning | `charging/commands/battery-preconditioning` | `on`, `off` | `battery_precon_on` / `battery_precon_off` |
 | AC current limit | `charging/settings/maximum_current` | whole amps, 8 to 80 | `set_ac_current_limit` |
+| Charging schedule | `charging/commands/charging-schedule` | `off`, `on` (keeps the car's times), `23:00-06:00` (on, with those times), or `{"on": true, "start": "23:00", "end": "06:00", "weekdays": false}`; 24-hour times, the car's own clock | `set_charging_schedule` (python-lucidmotors with that call; see below) |
 | Keyless driving | `commands/keyless-driving` | `on`, `off`; the car turns it on only when locked with no key in reach | `KeylessDrivingActionRequest` (sent the way the library's own calls are; it has no method for it) |
 
 Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "mode": "heat", "level": "low"}`). The state each one changes is published where the API has it, so a UI can show a toggle:
@@ -95,13 +96,14 @@ Each command also takes `{"command": "on"}` (seat climate: `{"seat": "driver", "
 | Battery preconditioning | `battery_preconditioning` | `battery.preconditioning_status` |
 | AC current limit | `charging/settings/maximum_current` | `charging.energy_ac_current_limit` |
 | Keyless driving | `keyless_driving` | `state.keyless_driving` |
+| Charging schedule | `charging_schedule_on`, `_start`, `_end`, `_weekdays`, `_available` | the car's own schedule, read by its own request once an hour and again right after a write, never per poll |
 | Defrost, rear window heat | `window_heating/heating_state`, `window_heating/windows/front`, `.../rear` | `hvac.defrost`, `hvac.rear_window_heating_status` (on if either is on, off only when both say off; the rear's "lost comm" states read unknown) |
 
 Sentry at home and at work have no state in the API that the connector can read, so they are commands only.
 
 From 0.4.0 a command the car's own config says it is not fitted for is refused before anything is sent: seat heat or ventilation on seats without it (`config.front_seats_heating`, `front_seats_ventilation`, `second_row_heated_seats`, and no rear centre seat on a six-seat car), the steering wheel heater on a car without one (`config.heated_steering_wheel`), and a remote frunk close on a gas strut (`config.frunk_strut`). Only an explicit "not fitted" refuses; a car that does not say keeps every control.
 
-Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (four windows fully down from afar is a theft and rain risk, and vent airs the cabin), the Sentry event and video history (a read API with no place in the shared model, whose media links point at Lucid's cloud), and opening or closing the charge port door, which on an Air opens by hand (its state is read; see below).
+Left out on purpose: **software updates** (`apply_update`). The car cannot be driven while an update installs; that is a decision to make in the car or the app with the release notes in front of you, not a button on a dashboard. Also left out: individual seat zones (backrest apart from cushion: the car binds them in pairs and the app sets a seat at once), a full window drop (four windows fully down from afar is a theft and rain risk, and vent airs the cabin), the Sentry videos and pictures (their links point at Lucid's cloud; the event log itself is read as `sentry_events`), and opening or closing the charge port door, which on an Air opens by hand (its state is read; see below).
 
 How they behave:
 
@@ -112,6 +114,39 @@ How they behave:
 - A climatization temperature in Fahrenheit is converted; anything outside 10 to 35 °C is refused as a probable unit mistake.
 
 ## What else it reads
+
+From 0.5.0, all read-only and unknown (`None`) when the car leaves a field out or sends its zero. A figure whose unit the proto does not give is published unitless under a name ending `_raw`, and only while it means something.
+
+| attribute | from | values |
+|---|---|---|
+| `battery_range_unavailable` | `battery.unavailable_range` | km the car is holding back (a cold pack) |
+| `scheduled_charge`, `scheduled_charge_time_raw` | `charging.scheduled_charge`, `charge_scheduled_time` | `idle`, `scheduled`, `requested`: why a plugged-in car is not charging; the time as sent, only while scheduled |
+| `charge_status` | `notifications.charging_general_status` | `normal`, `derated`, `preconditioning-saves-time` |
+| `charge_session_range_raw`, `charge_port_power_raw` | `charging.charge_session_mi`, `port_power` | as sent, only while charging (the range's unit is unverified, as is whether the port power is the wall's) |
+| `discharge_energy_raw` | `charging.discharge_energy` | as sent, only while discharging |
+| `charge_session_current_limit` | `charging.active_session_ac_current_limit` | amps the charger allows; only with a cable in (an unplugged Gravity sends its own setting) |
+| `sentry_alarm_sounding` | `sentry_state.remote_alarm_state` | true while the Sentry alarm is on |
+| `sentry_range_cost_per_day_raw` | `sentry_state.range_cost_per_day` | the car's own figure, unit unknown, never 0 |
+| `sentry_location_settings_raw` | `sentry_state.multiplex_values` | undecoded; probably the at-home and at-work settings |
+| `sentry_events` | Sentry's event log | JSON text, oldest first: `[{"id", "at", "level", "type", "lat", "lon", "pictures"}]`, the last 30 days (100 at most), read once an hour. Pictures are counted, never linked or fetched |
+| `tire_sensor_defective`, `tire_pressure_updated` | `chassis.sensor_defective_*`, `tire_pressure_last_updated` | a dead sensor told from a low tire; when the car last read the pressures, which also dates the pressures |
+| `gear`, `drive_mode` | `gear_position`, `drive_mode` | `park`, `reverse`, `neutral`, `drive`; `comfort`, `swift`, `winter`, `valet`, `sport-plus`, `tow` and the rest (factory and developer modes read unknown) |
+| `software_update_state`, `software_update_percent` | `software_update.state`, `percent_complete` | `installing`, `waiting`, `succeeded`, `failed` and more; the percent only while installing. The car's last result may stay after an install |
+| `trim`, `paint_color` | `config.variant`, `paint_color` | the app's names, e.g. `Grand Touring`, `Zenith Red` |
+| `ea_plan_name`, `ea_plan_expires` | `config.ea_subscription` | the Electrify America plan on the car and when it ends |
+| `privacy_mode` | `state.privacy_mode` | true when the owner has switched the car's connectivity off |
+| `mpb_fault` | `fault_state.mpb_fault_status` | `normal`, `warning`, `critical`, `hardware-fault`, for a module the proto does not name |
+| `charging_records` | Lucid's charge detail records (`GetCdrs`) | JSON text, oldest first: id, start and stop (UTC), energy, times, charger name, currency; numbers as sent (no unit given); every six hours, only when the car has an account id. No address, coordinates or card |
+
+`position/*` is dated from `gps.position_time` and the tire pressures from `tire_pressure_last_updated` when the car gives a time (seconds or milliseconds; told apart by size), so a stale reading is dated when it was taken. A time later than the poll is ignored.
+
+A Gravity's release notes are now fetched too, with its own document type, when the installed python-lucidmotors has `get_document_info`.
+
+Needs a python-lucidmotors that has `get_charging_schedule`, `set_charging_schedule` and `get_charging_data_records` (the release after 1.4.2). On an older one those attributes stay unknown and the schedule command refuses; everything else works as before.
+
+The schedule's time format is not documented by Lucid. A write copies the format the car itself used in what it last sent (`HH:MM` when it holds none), and refuses, sending nothing, if it was in a form this does not know. `weekdays` is the proto's `weekday_on`, passed as given.
+
+### Read in 0.4.0
 
 From 0.4.0. The meanings come from the protobuf's field and enum names; one reading of a parked Gravity settled their zero and sentinel cases, and none has been seen while driving, charging or with an update waiting. Each one is unknown (`None`) when the car leaves the field out or sends 0 or a sentinel, never a guessed value.
 
@@ -136,7 +171,7 @@ From 0.4.0. The meanings come from the protobuf's field and enum names; one read
 
 `gps_elevation_raw` is `gps.elevation` exactly as the car sends it: a plain number with no unit, None without a GPS fix. Its unit is unknown (a Gravity read 8932 where other cars at the same spot record 123 m), so it does not fill `position/altitude`; it is exposed so the value can be calibrated against known heights, for example drives logged beside other cars' elevations.
 
-Not published: `charging.charge_session_mi`, the range added this session, which may be miles as named or km as Lucid's other range figures are.
+`charging.charge_session_mi`, the range added this session, may be miles as named or km as Lucid's other range figures are, so from 0.5.0 it is published as `charge_session_range_raw`, unitless.
 
 `software_update_available` is true when the car announces an update and unknown otherwise: the proto has no value for "none waiting", so 0 no longer reads as false.
 

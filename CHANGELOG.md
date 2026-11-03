@@ -2,9 +2,15 @@
 
 ## 0.5.0 (Unreleased)
 
-Optional slower polling while the car is asleep; defaults unchanged.
+Optional slower polling while the car is asleep, the charging schedule, and the rest of what the car reports that is worth reading. Defaults unchanged.
 
 ### Added
+- **Charging schedule**: read as `charging_schedule_on`, `_start`, `_end`, `_weekdays` and `_available`, and written with the `charging/commands/charging-schedule` command (`off`, `on`, `23:00-06:00`, or `{"on", "start", "end", "weekdays"}`) behind `"commands": true`. The schedule is its own request to Lucid, made once an hour and again right after a write, never on the poll. The proto types the times as strings and does not give the format, so a write copies the car's own and sends nothing if it is in a form the connector does not know. Needs python-lucidmotors with `get_charging_schedule` and `set_charging_schedule` (the release after 1.4.2); on an older one the attributes are unknown and the command refuses.
+- **More of what the car reports, read-only**: `battery_range_unavailable`, `scheduled_charge` and its time, `charge_status` (derated charging), the session's range, the port's power and the current limit the charger allows, `discharge_energy_raw`, `sentry_alarm_sounding`, the Sentry range cost and the undecoded at-home/at-work word, `tire_sensor_defective` and when the pressures were read, `gear`, `drive_mode`, the install's progress and result, `trim`, `paint_color`, the Electrify America plan, `privacy_mode` and `mpb_fault`. The README's "What else it reads" table lists each with its source; a figure with no known unit is published as `_raw`.
+- **`sentry_events`**: Sentry's event log (time, level, type, place, picture count) as JSON, the last 30 days, read once an hour. The pictures are counted and never linked.
+- **`charging_records`**: Lucid's own charge detail records as JSON, every six hours, for a car that has an account id; needs `get_charging_data_records` in the library. No address, coordinates or card.
+- **Gravity release notes**, with its own document type, when the library has `get_document_info`.
+- **Positions and tire pressures are dated when the car took them** (`gps.position_time`, `tire_pressure_last_updated`) when it gives a usable time, not at the poll.
 - **`sleep_interval`** (default `interval`, so nothing changes unless it is set; at most 900): how often the account is read while every car is asleep. A wake shows on the first read after it, so a drive that starts from sleep is noticed up to this late, its start time and first stretch missed. At 240 a simulated day costs about 950 requests instead of about 1,900. A car awake, charging or driving keeps the whole account at `interval` or `driving_interval`; polling never wakes a car.
 - **`fast_poll`**, a writable connector attribute: seconds (0 to 600) to hold the awake interval for a car that looks asleep, with a read right away; 0 cancels. For a caller that knows the car is about to be used, such as a garage door opening. Sends nothing to the car, so it works without `commands`.
 - **A command holds the awake interval for five minutes**, so a wake that the early poll does not yet show cannot send the next poll out to a long sleep interval.
