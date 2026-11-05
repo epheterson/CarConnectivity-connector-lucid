@@ -882,6 +882,8 @@ def schedule_request(held: dict, wanted: dict) -> Tuple[bool, str, str, bool]:
             times[side] = divmod_minutes(held[side])
         elif one_held and not held["raw_" + side]:
             times[side] = None
+        elif held["raw_" + side]:
+            raise ValueError(f"the car writes its {side} time as {held['raw_' + side]!r}, a form this connector does not know; set it in the app")
         else:
             raise ValueError("the car holds no schedule times to build on; give both as HH:MM-HH:MM" if held["on"] is not None
                              else "the car's schedule has not been read yet; try again after the next poll")
