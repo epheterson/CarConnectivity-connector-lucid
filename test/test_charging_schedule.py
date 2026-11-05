@@ -81,9 +81,10 @@ def test_a_start_with_no_end_is_sent_back_with_no_end():
     assert mapping.schedule_request(held, parse_schedule("on")) == (True, "00:15", "", False), "the same schedule, written back"
     assert mapping.schedule_request(held, parse_schedule("01:00-")) == (True, "01:00", "", False)
     assert mapping.schedule_request(held, parse_schedule("-06:00")) == (True, "00:15", "06:00", False), "an end added, in the start's form"
-    odd = mapping.charging_schedule(pb.ChargingSchedule(schedule_on=True, start_time="00:15", end_time="sometime", weekday_on=False))
-    with pytest.raises(ValueError, match="end time as 'sometime'"):
-        mapping.schedule_request(odd, parse_schedule("on"))
+    unset = mapping.charging_schedule(pb.ChargingSchedule(schedule_on=True, start_time="00:15", end_time="4095", weekday_on=False))
+    assert unset["end"] is None, "the car's 4095 is no time"
+    assert mapping.schedule_request(unset, parse_schedule("on")) == (True, "00:15", "4095", False), "written back exactly as the car sent it"
+    assert mapping.schedule_request(unset, parse_schedule("-06:00")) == (True, "00:15", "06:00", False), "an end set replaces it"
 
 
 def test_nothing_to_turn_on_and_a_format_not_known_are_refused():

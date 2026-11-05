@@ -868,28 +868,34 @@ def _bool(value: Any) -> Optional[bool]:
     return value if isinstance(value, bool) else None
 
 
+NO_TIME = "4095"  # a schedule side with no time: all twelve bits set, as a real Air sends it
+
+
 def schedule_request(held: dict, wanted: dict) -> Tuple[bool, str, str, bool]:
     """(on, start, end, weekdays) to send: `wanted`'s values over what the car holds. ValueError, with
     the reason, when a time is missing from both or the car's time format is not known."""
     times = {}
-    # A schedule may hold one time only (a start with no end charges until full): the side the car leaves
-    # empty, and the request does not set, goes back empty. With neither held there is nothing to build on.
+    # A schedule may hold one time only: a real Air sent a start of 00:15 and an end of '4095', all twelve bits
+    # set, for none (it charges until full). The side the car holds no time for, and the request does not set,
+    # goes back exactly as the car sent it. With neither side a time there is nothing to build on.
     one_held = held["start"] is not None or held["end"] is not None
+    kept = {}
     for side in ("start", "end"):
         if wanted[side] is not None:
             times[side] = wanted[side]
         elif held[side] is not None:
             times[side] = divmod_minutes(held[side])
-        elif one_held and not held["raw_" + side]:
-            times[side] = None
-        elif held["raw_" + side]:
+        elif one_held and (held["raw_" + side] or "") in ("", NO_TIME):
+            kept[side] = held["raw_" + side] or ""
+        elif held["raw_" + side] and held["raw_" + side] != NO_TIME:
             raise ValueError(f"the car writes its {side} time as {held['raw_' + side]!r}, a form this connector does not know; set it in the app")
         else:
             raise ValueError("the car holds no schedule times to build on; give both as HH:MM-HH:MM" if held["on"] is not None
                              else "the car's schedule has not been read yet; try again after the next poll")
-    sample = held["raw_start"] or held["raw_end"]
-    start_text = "" if times["start"] is None else schedule_clock_like(held["raw_start"] or sample, times["start"])
-    end_text = "" if times["end"] is None else schedule_clock_like(held["raw_end"] or sample, times["end"])
+    raws = [held[k] for k in ("raw_start", "raw_end") if held[k] and held[k] != NO_TIME]
+    sample = held["raw_start"] if held["start"] is not None else held["raw_end"] if held["end"] is not None else (raws[0] if raws else None)
+    start_text = kept["start"] if "start" in kept else schedule_clock_like(held["raw_start"] if held["start"] is not None else sample, times["start"])
+    end_text = kept["end"] if "end" in kept else schedule_clock_like(held["raw_end"] if held["end"] is not None else sample, times["end"])
     if start_text is None or end_text is None:
         raise ValueError(f"the car writes schedule times as {held['raw_start']!r}, a form this connector does not know; set it in the app")
     weekdays = wanted["weekdays"] if wanted["weekdays"] is not None else bool(held["weekdays"])
