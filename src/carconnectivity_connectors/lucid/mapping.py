@@ -872,16 +872,22 @@ def schedule_request(held: dict, wanted: dict) -> Tuple[bool, str, str, bool]:
     """(on, start, end, weekdays) to send: `wanted`'s values over what the car holds. ValueError, with
     the reason, when a time is missing from both or the car's time format is not known."""
     times = {}
+    # A schedule may hold one time only (a start with no end charges until full): the side the car leaves
+    # empty, and the request does not set, goes back empty. With neither held there is nothing to build on.
+    one_held = held["start"] is not None or held["end"] is not None
     for side in ("start", "end"):
         if wanted[side] is not None:
             times[side] = wanted[side]
         elif held[side] is not None:
             times[side] = divmod_minutes(held[side])
+        elif one_held and not held["raw_" + side]:
+            times[side] = None
         else:
             raise ValueError("the car holds no schedule times to build on; give both as HH:MM-HH:MM" if held["on"] is not None
                              else "the car's schedule has not been read yet; try again after the next poll")
-    start_text = schedule_clock_like(held["raw_start"], times["start"])
-    end_text = schedule_clock_like(held["raw_end"], times["end"])
+    sample = held["raw_start"] or held["raw_end"]
+    start_text = "" if times["start"] is None else schedule_clock_like(held["raw_start"] or sample, times["start"])
+    end_text = "" if times["end"] is None else schedule_clock_like(held["raw_end"] or sample, times["end"])
     if start_text is None or end_text is None:
         raise ValueError(f"the car writes schedule times as {held['raw_start']!r}, a form this connector does not know; set it in the app")
     weekdays = wanted["weekdays"] if wanted["weekdays"] is not None else bool(held["weekdays"])
