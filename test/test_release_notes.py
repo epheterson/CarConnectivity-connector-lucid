@@ -55,6 +55,12 @@ class FakeAPI:
             raise self.fail_with
         return self.notes
 
+    async def get_document_info(self, vehicle, document_type, version=""):
+        self.asked.append((version, vehicle.vehicle_id, document_type))
+        if self.fail_with is not None:
+            raise self.fail_with
+        return self.notes
+
     async def close(self):
         pass
 
@@ -154,11 +160,20 @@ def test_a_failed_request_does_not_break_the_poll_or_repeat_on_the_next(rig, mon
     assert len(api.asked) == 2 and vehicle.software_update_release_notes.value == "Faster charging curve."
 
 
-@pytest.mark.parametrize("model", [pb.MODEL_GRAVITY, pb.MODEL_UNKNOWN])
-def test_a_car_not_known_to_be_an_air_gets_no_notes(rig, model):
-    """The library can only ask for the Air's document; on a Gravity it would be the wrong car's notes."""
+def test_a_gravity_gets_its_own_document_type(rig):
+    """An Air's notes on a Gravity would describe the wrong car; its own is GTY_RELEASE_NOTES_POST (13)."""
     connector, api, cc = rig
-    api.model = model
+    api.model = pb.MODEL_GRAVITY
+    api.software_update = waiting()
+    connector.fetch_vehicles()
+    vehicle = cc.garage.get_vehicle(VIN)
+    assert api.asked == [("3.1.2", "vid-1", 13)]
+    assert vehicle.software_update_release_notes.value == "Faster charging curve."
+
+
+def test_a_car_that_does_not_say_its_model_gets_no_notes(rig):
+    connector, api, cc = rig
+    api.model = pb.MODEL_UNKNOWN
     api.software_update = waiting()
     connector.fetch_vehicles()
     vehicle = cc.garage.get_vehicle(VIN)

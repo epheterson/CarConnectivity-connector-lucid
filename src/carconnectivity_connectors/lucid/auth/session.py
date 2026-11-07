@@ -35,6 +35,9 @@ COMMAND_TIMEOUT_S = 60.0
 RELEASE_NOTES_TIMEOUT_S = 15.0
 OTA_HISTORY_TIMEOUT_S = 20.0
 OTA_HISTORY_LIMIT = 100
+# The slow reads (schedule, Sentry events, charge records) are each one request to Lucid's cloud, made
+# rarely and off the poll's own request.
+SLOW_READ_TIMEOUT_S = 20.0
 
 
 def load_refresh_token(path: Path) -> str:
@@ -157,7 +160,7 @@ class LucidSession:
                 raise translate_api_error(exc) from exc
         return self.run(_go())
 
-    def release_notes(self, lucid_vehicle: Any, version: str):
+    def release_notes(self, lucid_vehicle: Any, version: str, document_type: Optional[int] = None):
         """The release notes document for one software version -- one gRPC call, which
         reads Lucid's document store and never the car. It runs under the session lock like
         everything else (the loop and the client belong to it), so it has a deadline of its
@@ -169,11 +172,29 @@ class LucidSession:
                 async with asyncio.timeout(timeout_s):
                     api = await self._ensure()
                     try:
+                        if document_type is not None:
+                            return await api.get_document_info(lucid_vehicle, document_type, version)
                         return await api.get_update_release_notes(version, lucid_vehicle)
                     except Exception as exc:  # pylint: disable=broad-except
                         raise translate_api_error(exc) from exc
             except TimeoutError as exc:
                 raise RetrievalError(f"no release notes from Lucid within {timeout_s:.0f}s") from exc
+        return self.run(_go())
+
+    def read(self, what: str, call: Callable[[Any], Any], timeout_s: float = SLOW_READ_TIMEOUT_S):
+        """One read of Lucid's records that is not the poll: `call(api)` is a coroutine. Never touches the
+        car, has its own deadline (the poll and every command wait behind the session lock), and
+        reports failures in the connector's own error types."""
+        async def _go():
+            try:
+                async with asyncio.timeout(timeout_s):
+                    api = await self._ensure()
+                    try:
+                        return await call(api)
+                    except Exception as exc:  # pylint: disable=broad-except
+                        raise translate_api_error(exc) from exc
+            except TimeoutError as exc:
+                raise RetrievalError(f"no {what} from Lucid within {timeout_s:.0f}s") from exc
         return self.run(_go())
 
     def ota_history(self, vin: str):

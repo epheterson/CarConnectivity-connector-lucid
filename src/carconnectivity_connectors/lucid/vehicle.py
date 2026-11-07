@@ -4,18 +4,20 @@ pattern CarConnectivity uses and for parity with other connectors."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
 
+import re
+
 from enum import Enum
 
-from carconnectivity.attributes import BooleanAttribute, DurationAttribute, EnergyAttribute, EnumAttribute, FloatAttribute, SpeedAttribute, \
-    StringAttribute, TemperatureAttribute
+from carconnectivity.attributes import BooleanAttribute, CurrentAttribute, DateAttribute, DurationAttribute, EnergyAttribute, EnumAttribute, \
+    FloatAttribute, RangeAttribute, SpeedAttribute, StringAttribute, TemperatureAttribute
 from carconnectivity.commands import GenericCommand
 from carconnectivity.doors import Doors
 from carconnectivity.errors import SetterError
-from carconnectivity.units import Energy, Speed, Temperature
+from carconnectivity.units import Current, Energy, Length, Speed, Temperature
 from carconnectivity.vehicle import GenericVehicle, ElectricVehicle
 
 if TYPE_CHECKING:
-    from typing import Optional, Dict, Union
+    from typing import Any, Optional, Dict, Union
     from carconnectivity.objects import GenericObject
     from carconnectivity.garage import Garage
     from carconnectivity_connectors.base.connector import BaseConnector
@@ -23,6 +25,7 @@ if TYPE_CHECKING:
 
 class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attributes
     """A Lucid vehicle."""
+    # pylint: disable-next=too-many-statements
     def __init__(self, vin: Optional[str] = None, garage: Optional[Garage] = None, managing_connector: Optional[BaseConnector] = None,
                  origin: Optional[LucidVehicle] = None, initialization: Optional[Dict] = None) -> None:
         if origin is not None:
@@ -128,6 +131,59 @@ class LucidVehicle(GenericVehicle):  # pylint: disable=too-many-instance-attribu
         self.software_history: StringAttribute = StringAttribute(name="software_history", parent=self, tags={'connector_custom'})
         self.battery_health_level: FloatAttribute = FloatAttribute(name="battery_health_level", parent=self, precision=0.01, tags={'connector_custom'})
 
+        # 0.5.0. Everything below is read-only and published as the proto names it. A figure whose
+        # unit the proto does not give is published unitless under a name ending in _raw.
+        # Battery: range the car is holding back (a cold pack), in km like its other ranges.
+        self.battery_range_unavailable: RangeAttribute = RangeAttribute(name="battery_range_unavailable", parent=self, unit=Length.KM, minimum=0.0,
+                                                                        precision=0.1, tags={'connector_custom'})
+        # Charging: the scheduled-charge state and time, why a charge is slow, what the port and the
+        # session report. The charging schedule itself is the charging_schedule_* group below.
+        self.scheduled_charge: EnumAttribute[ScheduledCharge] = EnumAttribute(name="scheduled_charge", parent=self, value_type=ScheduledCharge,
+                                                                              tags={'connector_custom'})
+        self.scheduled_charge_time_raw: FloatAttribute = FloatAttribute(name="scheduled_charge_time_raw", parent=self, tags={'connector_custom'})
+        self.charge_status: EnumAttribute[ChargeStatus] = EnumAttribute(name="charge_status", parent=self, value_type=ChargeStatus,
+                                                                        tags={'connector_custom'})
+        self.charge_session_range_raw: FloatAttribute = FloatAttribute(name="charge_session_range_raw", parent=self, tags={'connector_custom'})
+        self.charge_port_power_raw: FloatAttribute = FloatAttribute(name="charge_port_power_raw", parent=self, tags={'connector_custom'})
+        self.discharge_energy_raw: FloatAttribute = FloatAttribute(name="discharge_energy_raw", parent=self, tags={'connector_custom'})
+        self.charge_session_current_limit: CurrentAttribute = CurrentAttribute(name="charge_session_current_limit", parent=self, unit=Current.A,
+                                                                               minimum=0.0, precision=1.0, tags={'connector_custom'})
+        # The charging schedule the car holds, read from its own request (not part of the poll) and
+        # written by the charging-schedule command. Times are "HH:MM" in the car's own clock.
+        self.charging_schedule_on: BooleanAttribute = BooleanAttribute(name="charging_schedule_on", parent=self, tags={'connector_custom'})
+        self.charging_schedule_start: StringAttribute = StringAttribute(name="charging_schedule_start", parent=self, tags={'connector_custom'})
+        self.charging_schedule_end: StringAttribute = StringAttribute(name="charging_schedule_end", parent=self, tags={'connector_custom'})
+        self.charging_schedule_weekdays: BooleanAttribute = BooleanAttribute(name="charging_schedule_weekdays", parent=self, tags={'connector_custom'})
+        self.charging_schedule_available: BooleanAttribute = BooleanAttribute(name="charging_schedule_available", parent=self, tags={'connector_custom'})
+        # Security: the remote alarm sounding, the car's own Sentry range cost, and the undecoded
+        # at-home / at-work settings word.
+        self.sentry_alarm_sounding: BooleanAttribute = BooleanAttribute(name="sentry_alarm_sounding", parent=self, tags={'connector_custom'})
+        self.sentry_range_cost_per_day_raw: FloatAttribute = FloatAttribute(name="sentry_range_cost_per_day_raw", parent=self, tags={'connector_custom'})
+        self.sentry_location_settings_raw: FloatAttribute = FloatAttribute(name="sentry_location_settings_raw", parent=self, tags={'connector_custom'})
+        # Sentry's event log (time, level, type, place, picture count), JSON text, read slowly.
+        self.sentry_events: StringAttribute = StringAttribute(name="sentry_events", parent=self, tags={'connector_custom'})
+        # Tires: a dead sensor told apart from a low tire, and when the pressures were read.
+        self.tire_sensor_defective: BooleanAttribute = BooleanAttribute(name="tire_sensor_defective", parent=self, tags={'connector_custom'})
+        self.tire_pressure_updated: DateAttribute = DateAttribute(name="tire_pressure_updated", parent=self, tags={'connector_custom'})
+        # Drive: the gear and the mode (valet is the mode below read as a boolean).
+        self.gear: EnumAttribute[Gear] = EnumAttribute(name="gear", parent=self, value_type=Gear, tags={'connector_custom'})
+        self.drive_mode: EnumAttribute[DriveMode] = EnumAttribute(name="drive_mode", parent=self, value_type=DriveMode, tags={'connector_custom'})
+        # Software: how far an install has got, and how the last one ended.
+        self.software_update_percent: FloatAttribute = FloatAttribute(name="software_update_percent", parent=self, minimum=0.0, maximum=100.0,
+                                                                      precision=1.0, tags={'connector_custom'})
+        self.software_update_state: EnumAttribute[UpdateStatus] = EnumAttribute(name="software_update_state", parent=self, value_type=UpdateStatus,
+                                                                                tags={'connector_custom'})
+        # Identity: trim and paint by name, and the Electrify America plan on the car.
+        self.trim: StringAttribute = StringAttribute(name="trim", parent=self, tags={'connector_custom'})
+        self.paint_color: StringAttribute = StringAttribute(name="paint_color", parent=self, tags={'connector_custom'})
+        self.ea_plan_name: StringAttribute = StringAttribute(name="ea_plan_name", parent=self, tags={'connector_custom'})
+        self.ea_plan_expires: DateAttribute = DateAttribute(name="ea_plan_expires", parent=self, tags={'connector_custom'})
+        # Connectivity switched off by the owner, and the fault word of a module the proto calls MPB.
+        self.privacy_mode: BooleanAttribute = BooleanAttribute(name="privacy_mode", parent=self, tags={'connector_custom'})
+        self.mpb_fault: EnumAttribute[MpbFault] = EnumAttribute(name="mpb_fault", parent=self, value_type=MpbFault, tags={'connector_custom'})
+        # Lucid's charge detail records, JSON text, read slowly (see the README).
+        self.charging_records: StringAttribute = StringAttribute(name="charging_records", parent=self, tags={'connector_custom'})
+
 
 class LucidElectricVehicle(ElectricVehicle, LucidVehicle):
     """A Lucid electric vehicle -- i.e. any Lucid."""
@@ -199,6 +255,132 @@ class UnattendedOccupantDetection(_Named):
     STAGE_2 = 'stage-2'
     STAGE_3 = 'stage-3'
     FAULT = 'fault'
+
+
+class ScheduledCharge(_Named):
+    """ChargingState.scheduled_charge: whether the car is waiting on its charging schedule."""
+    IDLE = 'idle'
+    SCHEDULED = 'scheduled'
+    REQUESTED = 'requested'
+
+
+class ChargeStatus(_Named):
+    """Notifications.charging_general_status: why a charge is not at full speed."""
+    NORMAL = 'normal'
+    DERATED = 'derated'
+    PRECONDITIONING_SAVES_TIME = 'preconditioning-saves-time'
+
+
+class Gear(_Named):
+    """GearPosition."""
+    PARK = 'park'
+    REVERSE = 'reverse'
+    NEUTRAL = 'neutral'
+    DRIVE = 'drive'
+
+
+class DriveMode(_Named):
+    """DriveMode, the modes an owner can be in; the factory, developer and reserved ones read as unknown."""
+    COMFORT = 'comfort'
+    SWIFT = 'swift'
+    WINTER = 'winter'
+    VALET = 'valet'
+    SPORT_PLUS = 'sport-plus'
+    SERVICE = 'service'
+    LAUNCH = 'launch'
+    TRANSPORT = 'transport'
+    SHOWROOM = 'showroom'
+    TOW = 'tow'
+    TEST_DRIVE = 'test-drive'
+    TRACK_A = 'track-a'
+    TRACK_B = 'track-b'
+    TRACK_C = 'track-c'
+    TRAILER = 'trailer'
+    YOUNG_ADULT = 'young-adult'
+    CAMPING = 'camping'
+    TRAIN = 'train'
+    CUSTOM = 'custom'
+
+
+class UpdateStatus(_Named):
+    """SoftwareUpdate.state: an install under way, and how the last one ended."""
+    INSTALLING = 'installing'
+    WAITING = 'waiting'
+    SUCCEEDED = 'succeeded'
+    SUCCEEDED_WITH_WARNINGS = 'succeeded-with-warnings'
+    NOT_STARTED_WITH_WARNINGS = 'not-started-with-warnings'
+    FAILED = 'failed'
+    FAILED_DRIVABLE = 'failed-drivable'
+
+
+class MpbFault(_Named):
+    """FaultState.mpb_fault_status, for a module the proto does not name."""
+    NORMAL = 'normal'
+    WARNING = 'warning'
+    CRITICAL = 'critical'
+    HARDWARE_FAULT = 'hardware-fault'
+
+
+class ChargingScheduleCommand(GenericCommand):
+    """The charging schedule: "off", "on", "23:00-06:00" (on, with those times), "23:00-" or "-06:00"
+    (on, changing only the start or only the end), or {"on": bool, "start": "HH:MM", "end": "HH:MM",
+    "weekdays": bool}. Whatever is not given is kept as the car holds it. Checked here, so a bad time
+    never reaches the car."""
+    def __init__(self, name: str, parent: Optional[GenericObject] = None, initialization: Optional[Dict] = None) -> None:
+        super().__init__(name=name, parent=parent, initialization=initialization)
+
+    @property
+    def value(self) -> Optional[Union[str, Dict]]:
+        return super().value
+
+    @value.setter
+    def value(self, new_value: Optional[Union[str, Dict]]) -> None:
+        new_value = self._execute_on_set_hook(new_value, early_hook=True)
+        parsed = parse_schedule(new_value)
+        if not self._is_changeable:
+            raise TypeError('You cannot use this command. Command is not implemented.')
+        new_value = self._execute_on_set_hook(parsed, early_hook=False)
+        self._set_value(new_value)
+
+
+SCHEDULE_USAGE = 'use "off", "on", "HH:MM-HH:MM" ("HH:MM-" or "-HH:MM" for one end), or {"on": bool, "start": "HH:MM", "end": "HH:MM", "weekdays": bool}'
+_CLOCK = re.compile(r'^([01]?\d|2[0-3]):([0-5]\d)$')
+
+
+def clock_minutes(text: Any) -> int:
+    """"23:05" as minutes after midnight; SetterError for anything else."""
+    match = _CLOCK.match(text.strip()) if isinstance(text, str) else None
+    if match is None:
+        raise SetterError(f'Invalid time {text!r}; use 24-hour "HH:MM"')
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def parse_schedule(value: Any) -> Dict[str, Any]:
+    """A schedule command's argument as {"on", "start", "end", "weekdays"} where each of start,
+    end and weekdays is None to mean "keep what the car holds"; start and end are minutes after midnight."""
+    if isinstance(value, dict) and set(value) == {'command'}:
+        value = value['command']
+    out: Dict[str, Any] = {'on': None, 'start': None, 'end': None, 'weekdays': None}
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in ('on', 'off'):
+            out['on'] = word == 'on'
+        elif '-' in word and word != '-':
+            start, _, end = word.partition('-')
+            out.update(on=True, start=clock_minutes(start) if start.strip() else None, end=clock_minutes(end) if end.strip() else None)
+        else:
+            raise SetterError(f'Invalid value for the charging schedule: {value!r}; {SCHEDULE_USAGE}')
+    elif isinstance(value, dict):
+        unknown = set(value) - {'on', 'start', 'end', 'weekdays'}
+        if unknown or not isinstance(value.get('on'), bool) or not isinstance(value.get('weekdays', False), bool):
+            raise SetterError(f'Invalid value for the charging schedule: {value!r}; {SCHEDULE_USAGE}')
+        out.update(on=value['on'], weekdays=value.get('weekdays'))
+        for key in ('start', 'end'):
+            if value.get(key) is not None:
+                out[key] = clock_minutes(value[key])
+    else:
+        raise SetterError(f'Invalid value for the charging schedule: {value!r}; {SCHEDULE_USAGE}')
+    return out
 
 
 class ChoiceCommand(GenericCommand):
